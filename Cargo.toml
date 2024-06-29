@@ -1,0 +1,17 @@
+[package]
+name = "test-float-parse"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+resolver = "1"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+pbr = "1.1.1"
+rand_chacha = "0.3"
+rayon = "1"
+
+[lib]
+name = "test_float_parse"
