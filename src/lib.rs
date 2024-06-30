@@ -2,6 +2,7 @@
 
 mod validate;
 
+use num::Integer;
 use std::any::{type_name, TypeId};
 use std::collections::HashMap;
 use std::io::prelude::*;
@@ -306,33 +307,77 @@ impl<'a> Write for Tee<'a> {
 trait Int:
     Copy
     + fmt::Debug
+    + fmt::LowerHex
     + ops::Add<Output = Self>
     + ops::Sub<Output = Self>
-    + ops::AddAssign
     + ops::Shl<u32, Output = Self>
+    + ops::Shr<u32, Output = Self>
+    + ops::BitAnd<Output = Self>
+    + ops::BitOr<Output = Self>
+    + ops::Not<Output = Self>
+    + ops::AddAssign
+    + ops::BitAndAssign
+    + ops::BitOrAssign
+    + TryInto<u32, Error: fmt::Debug>
+    + From<u8>
+    + TryFrom<i8>
     + PartialOrd
+    + Integer
     + 'static
 {
+    type Signed: Int;
+
+    const BITS: u32;
     const ZERO: Self;
     const ONE: Self;
+
+    fn to_signed(self) -> Self::Signed;
+
+    fn wrapping_neg(self) -> Self;
+
+    fn hex(self) -> String {
+        format!("{:x}", self)
+    }
 }
 
 macro_rules! impl_int {
-    ($($ty:ty),+) => {
+    ($($uty:ty, $sty:ty);+) => {
         $(
-            impl Int for $ty {
+            impl Int for $uty {
+                type Signed = $sty;
+                const BITS: u32 = Self::BITS;
                 const ZERO: Self = 0;
-                const ONE: Self = 0;
+                const ONE: Self = 1;
+                fn to_signed(self) -> Self::Signed {
+                    self.try_into().unwrap()
+                }
+                fn wrapping_neg(self) -> Self {
+                    self.wrapping_neg()
+                }
+            }
+
+            impl Int for $sty {
+                type Signed = Self;
+                const BITS: u32 = Self::BITS;
+                const ZERO: Self = 0;
+                const ONE: Self = 1;
+                fn to_signed(self) -> Self::Signed {
+                    self
+                }
+                fn wrapping_neg(self) -> Self {
+                    self.wrapping_neg()
+                }
             }
         )+
     }
 }
 
-impl_int!(u32, u64);
+impl_int!(u32, i32; u64, i64);
 
-trait Float: Copy + fmt::LowerExp + FromStr<Err: fmt::Debug> + Sized + 'static {
+trait Float: Copy + fmt::LowerExp + FromStr<Err: fmt::Display> + Sized + 'static {
     /// Unsigned integer of same width
-    type Int: Int;
+    type Int: Int<Signed = Self::SInt>;
+    type SInt: Int;
 
     /// Total bits
     const BITS: u32;
@@ -342,12 +387,35 @@ trait Float: Copy + fmt::LowerExp + FromStr<Err: fmt::Debug> + Sized + 'static {
 
     /// Bits in the exponent
     const EXP_BITS: u32 = Self::BITS - Self::MAN_BITS - 1;
+    const EXP_MAX: u32 = (1 << Self::EXP_BITS) - 1;
+    const EXP_BIAS: u32 = Self::EXP_MAX >> 1;
 
     // const MAN_MASK: Self::Int = (Self::Int::ONE << Self::MAN_BITS) - Self::Int::ONE;
     const MAN_MASK: Self::Int;
+    const SIGN_MASK: Self::Int;
 
     fn from_bits(i: Self::Int) -> Self;
     fn to_bits(self) -> Self::Int;
+
+    fn is_sign_negative(self) -> bool {
+        (self.to_bits() & Self::SIGN_MASK) > Self::Int::ZERO
+    }
+
+    /// Exponent without adjustment
+    fn exponent(self) -> u32 {
+        (self.to_bits() & (!Self::SIGN_MASK) >> Self::MAN_BITS)
+            .try_into()
+            .unwrap()
+    }
+
+    /// Adjusted for the bias
+    fn exponent_adj(self) -> i32 {
+        self.exponent() as i32 - Self::EXP_BIAS as i32
+    }
+
+    fn mantissa(self) -> Self::Int {
+        self.to_bits() & Self::MAN_MASK
+    }
 }
 
 macro_rules! impl_float {
@@ -355,9 +423,11 @@ macro_rules! impl_float {
         $(
             impl Float for $ty {
                 type Int = $ity;
+                type SInt = <Self::Int as Int>::Signed;
                 const BITS: u32 = $bits;
                 const MAN_BITS: u32 = Self::MANTISSA_DIGITS - 1;
                 const MAN_MASK: Self::Int = (Self::Int::ONE << Self::MAN_BITS) - Self::Int::ONE;
+                const SIGN_MASK: Self::Int = Self::Int::ONE << (Self::BITS-1);
                 fn from_bits(i: Self::Int) -> Self { Self::from_bits(i) }
                 fn to_bits(self) -> Self::Int { self.to_bits() }
             }
