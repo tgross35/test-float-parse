@@ -1,10 +1,13 @@
 #![allow(unused)]
 
+mod validate;
+
 use std::any::{type_name, TypeId};
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::ops::ControlFlow;
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::{fmt, fs, io, mem, ops, sync::mpsc, thread, time};
 use time::{Duration, Instant};
 
@@ -181,6 +184,8 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
             let msg = rx.recv().unwrap();
             msg.handle(tests, out);
         }
+
+        assert_eq!(rx.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
     });
 
     Instant::now() - start
@@ -325,7 +330,7 @@ macro_rules! impl_int {
 
 impl_int!(u32, u64);
 
-trait Float: Copy + fmt::LowerExp + Sized + 'static {
+trait Float: Copy + fmt::LowerExp + FromStr<Err: fmt::Debug> + Sized + 'static {
     /// Unsigned integer of same width
     type Int: Int;
 
