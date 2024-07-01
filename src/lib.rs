@@ -17,6 +17,7 @@ use validate::FloatConstants;
 
 mod gen {
     pub mod few_ones;
+    pub mod huge_pow10;
     pub mod short_decimals;
     pub mod subnorm;
     pub mod u32_small;
@@ -187,7 +188,8 @@ where
 {
     register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(v);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(v);
-    register_generator_for_float::<F, gen::short_decimals::ShortDecimals>(v);
+    register_generator_for_float::<F, gen::short_decimals::SmallExponents>(v);
+    register_generator_for_float::<F, gen::huge_pow10::LargeExponents>(v);
     register_generator_for_float::<F, gen::few_ones::FewOnes<F>>(v);
     register_generator_for_float::<F, gen::u32_small::SmallInt>(v);
 }

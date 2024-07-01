@@ -1,17 +1,16 @@
 use crate::{Float, Generator};
 
-/// Skip e = 0 because small-u32 already does those.
 const COEFF_MAX: u32 = 10_000;
 const EXP_MAX: u32 = 301;
 
-pub struct ShortDecimals {
+pub struct SmallExponents {
     iter: Box<dyn Iterator<Item = String>>,
     /// Even though the iterator allocates, we still need the internal buffer
     /// to meet the function signature.
     buf: String,
 }
 
-impl<F: Float> Generator<F> for ShortDecimals {
+impl<F: Float> Generator<F> for SmallExponents {
     const NAME: &'static str = "short decimals";
     const SHORT_NAME: &'static str = "short dec";
 
