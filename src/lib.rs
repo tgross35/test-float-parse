@@ -16,11 +16,11 @@ use time::{Duration, Instant};
 use validate::FloatConstants;
 
 mod gen {
+    pub mod exponents;
     pub mod few_ones;
-    pub mod huge_pow10;
-    pub mod short_decimals;
+    pub mod integers;
     pub mod subnorm;
-    pub mod u32_small;
+    pub mod u64_pow2;
 }
 
 // Nothing up my sleeve: Just (PI - 3) in base 16.
@@ -188,10 +188,11 @@ where
 {
     register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(v);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(v);
-    register_generator_for_float::<F, gen::short_decimals::SmallExponents>(v);
-    register_generator_for_float::<F, gen::huge_pow10::LargeExponents>(v);
+    register_generator_for_float::<F, gen::exponents::SmallExponents>(v);
+    register_generator_for_float::<F, gen::exponents::LargeExponents>(v);
     register_generator_for_float::<F, gen::few_ones::FewOnes<F>>(v);
-    register_generator_for_float::<F, gen::u32_small::SmallInt>(v);
+    register_generator_for_float::<F, gen::integers::SmallInt>(v);
+    register_generator_for_float::<F, gen::integers::LargeInt>(v);
 }
 
 fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>) {
@@ -282,7 +283,8 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
 fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCode {
     out.write_sout(format!("\n\nResults:"));
 
-    let mut failed_tests = 0;
+    let mut failed_generators = 0;
+    let mut errored_generators = 0;
 
     for t in tests {
         let Completed {
@@ -293,8 +295,10 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
         } = t.completed.as_ref().unwrap();
 
         let stat = if result.is_err() {
+            errored_generators += 1;
             "ERROR"
         } else if *failures > 0 {
+            failed_generators += 1;
             "FAILURE"
         } else {
             "SUCCESS"
@@ -309,19 +313,17 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
         if let Err(reason) = result {
             out.write_sout(format!("      reason: {reason}"));
         }
-
-        if *failures > 0 || result.is_err() {
-            failed_tests += 1;
-        }
     }
 
     out.write_sout(format!(
-        "{}/{} tests succeeded in {total_elapsed:?}",
-        tests.len() - failed_tests,
-        tests.len()
+        "{passed}/{} tests succeeded in {total_elapsed:?} ({passed} passed, {} failed, {} errors)",
+        tests.len(),
+        failed_generators,
+        errored_generators,
+        passed = tests.len() - failed_generators - errored_generators,
     ));
 
-    if failed_tests > 0 {
+    if failed_generators > 0 || errored_generators > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -364,9 +366,9 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let elapsed = Instant::now() - started;
 
         // Warn about bad estimates
-        if executed > est {
+        if executed != est {
             result = Err(format!(
-                "executed tests > estimated ({executed} {est}) for {}",
+                "executed tests != estimated ({executed} != {est}) for {}",
                 G::NAME
             )
             .into());
