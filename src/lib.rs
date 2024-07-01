@@ -16,24 +16,15 @@ use time::{Duration, Instant};
 use validate::FloatConstants;
 
 mod gen {
-    // pub mod long_fractions;
+    pub mod few_ones;
     pub mod short_decimals;
     pub mod subnorm;
-    // pub mod u64_pow2;
+    pub mod u32_small;
 }
 
 // Nothing up my sleeve: Just (PI - 3) in base 16.
 #[allow(dead_code)]
 pub const SEED: [u32; 3] = [0x243f_6a88, 0x85a3_08d3, 0x1319_8a2e];
-
-pub fn validate(text: &str) {
-    let mut out = io::stdout();
-    let x: f64 = text.parse().unwrap();
-    let f64_bytes: u64 = unsafe { mem::transmute(x) };
-    let x: f32 = text.parse().unwrap();
-    let f32_bytes: u32 = unsafe { mem::transmute(x) };
-    writeln!(&mut out, "{:016x} {:08x} {}", f64_bytes, f32_bytes, text).unwrap();
-}
 
 /// Message passed from a test runner to the host
 #[derive(Clone, Debug)]
@@ -55,51 +46,41 @@ impl Msg {
         tests.iter_mut().find(|t| t.id == self.id).unwrap()
     }
 
-    fn handle(self, tests: &mut [TestInfo], out: &mut Outputs) {
+    fn handle(self, tests: &mut [TestInfo], out: &mut Tee, mp: &MultiProgress) {
         let test = self.find_test(tests);
         let mut pb = &mut test.pb.as_mut().unwrap();
-        // let mut pb = &mut test.pb.as_mut().unwrap().0;
 
         match self.update {
-            Update::Started => writeln!(out, "Testing '{}'", test.name).unwrap(),
+            Update::Started => {
+                out.write_mp(mp, format!("Testing '{}'", test.name));
+            }
             Update::Progress {
                 executed,
-                total,
                 duration_each_us,
             } => {
-                pb.set_length(total);
                 pb.set_position(executed);
-                // pb.total = total;
-                // pb.set(executed);
             }
-            Update::Failure { f, input } => {
-                writeln!(
-                    out,
-                    "Failure in '{}': {}. parsing {input}",
-                    test.name,
-                    f.msg()
-                )
-                .unwrap();
-
-                pb.finish();
-            }
-            Update::MaxFailuresExceeded => {
-                todo!()
-                // writeln!(
-                //     out,
-                //     "Failed test '{}' in {:?}. {} tests run, {} failures",
-                //     test.name, c.elapsed, c.executed, c.failures
-                // );
+            Update::Failure { fail, input } => {
+                out.write_mp(
+                    mp,
+                    format!(
+                        "Failure in '{}': {}. parsing {input}",
+                        test.name,
+                        fail.msg()
+                    ),
+                );
             }
             Update::Completed(c) => {
-                writeln!(
-                    out,
-                    "Completed test '{}' in {:?}. {} tests run, {} failures",
-                    test.name, c.elapsed, c.executed, c.failures
-                )
-                .unwrap();
+                test.finalize_pb(&c);
+
+                out.write_mp(
+                    mp,
+                    format!(
+                        "Completed tests for generator '{}' in {:?}. {} tests run, {} failures",
+                        test.name, c.elapsed, c.executed, c.failures
+                    ),
+                );
                 test.completed = Some(c);
-                pb.finish();
             }
         };
     }
@@ -111,16 +92,14 @@ enum Update {
     /// Completed a out of b tests
     Progress {
         executed: u64,
-        total: u64,
         duration_each_us: u64,
     },
     /// Received a failed test
     Failure {
-        f: Failure,
+        fail: Failure,
         input: Box<str>,
     },
-    /// Generator exceeded the max number of failures; stoping
-    MaxFailuresExceeded,
+    /// Exited with an unexpected condition
     Completed(Completed),
 }
 
@@ -149,28 +128,31 @@ struct TestInfo {
     id: TypeId,
     f_name: &'static str,
     gen_name: &'static str,
+    gen_short_name: &'static str,
     name: String,
+    short_name: String,
     run: bool,
     estimated_tests: u64,
     launch: for<'s> fn(&'s thread::Scope<'s, '_>, mpsc::Sender<Msg>, &TestInfo),
-    // pb: Option<Pb>,
     pb: Option<ProgressBar>,
     completed: Option<Completed>,
 }
 
-/// Weapper to keep the debug impl
-// struct Pb(ProgressBar<Pipe>);
+impl TestInfo {
+    fn finalize_pb(&mut self, c: &Completed) {
+        let pb = self.pb.take().unwrap();
+        pb.set_message(format!("{} ({} failures)", self.short_name, c.failures));
 
-// impl fmt::Debug for Pb {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         f.debug_tuple("Pb").finish()
-//     }
-// }
+        pb.finish();
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Completed {
     executed: u64,
     failures: u64,
+    /// Exists if exited with an error
+    result: Result<(), Box<str>>,
     elapsed: Duration,
 }
 
@@ -189,10 +171,7 @@ pub fn run(cfg: &Config) -> ExitCode {
     // TODO: pop tests that don't match the filter
 
     let (logfile, logfile_name) = log_file();
-    let mut out = Outputs {
-        f: &logfile,
-        stdout: io::stdout().lock(),
-    };
+    let mut out = Tee { f: &logfile };
     let elapsed = launch_tests(&mut tests, cfg, &mut out);
     let ret = finish(&tests, elapsed, &mut out);
 
@@ -202,21 +181,29 @@ pub fn run(cfg: &Config) -> ExitCode {
     ret
 }
 
-fn register_float<F: Float>(v: &mut Vec<TestInfo>) {
+fn register_float<F: Float>(v: &mut Vec<TestInfo>)
+where
+    <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+{
     register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(v);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(v);
     register_generator_for_float::<F, gen::short_decimals::ShortDecimals>(v);
+    register_generator_for_float::<F, gen::few_ones::FewOnes<F>>(v);
+    register_generator_for_float::<F, gen::u32_small::SmallInt>(v);
 }
 
 fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>) {
     let f_name = type_name::<F>();
     let gen_name = G::NAME;
+    let gen_short_name = G::SHORT_NAME;
 
     let info = TestInfo {
         id: TypeId::of::<(F, G)>(),
         f_name,
         gen_name,
+        gen_short_name,
         name: format!("{f_name} {gen_name}"),
+        short_name: format!("{f_name} {gen_short_name}"),
         run: true,
         launch: launch_one::<F, G>,
         estimated_tests: G::estimated_tests(),
@@ -226,60 +213,72 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
     v.push(info)
 }
 
+enum EndCondition {
+    Timeout,
+    Success(Duration),
+}
+
 /// Run all tests
 ///
 /// Take `tests` by value so we can mutate it within the thread scope
-fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Outputs) -> Duration {
+fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Duration {
     let (tx, rx) = mpsc::channel::<Msg>();
     let total_tests = tests.len();
-    // let mut mb = MultiBar::on(io::stderr());
     let mp = MultiProgress::new();
     let pb_style = ProgressStyle::with_template("[{elapsed}] {bar:40.cyan/blue} {pos}/{len} {msg}")
         .unwrap()
         .progress_chars("##-");
+
+    for test in tests.iter() {
+        out.write_sout(format!("Launching test '{}'", test.name));
+    }
 
     let start = Instant::now();
 
     thread::scope(move |scope| {
         for test in tests.iter_mut() {
             if test.run {
-                writeln!(out, "Launching test '{}'", test.name);
-
                 let mut pb = mp.add(ProgressBar::new(test.estimated_tests));
                 pb.set_style(pb_style.clone());
-                pb.set_message(test.name.clone());
+                pb.set_message(test.short_name.clone());
                 test.pb = Some(pb);
 
                 (test.launch)(scope, tx.clone(), &test);
             }
         }
 
-        // scope.spawn(move || mb.listen());
-
-        loop {
+        let end_condition = loop {
             let elapsed = Instant::now() - start;
             if elapsed > config.timeout {
-                writeln!(out, "Timeout of {:?} reached", config.timeout);
-                break;
+                break EndCondition::Timeout;
             }
 
             if tests.iter().all(|t| t.completed.is_some()) {
-                writeln!(out, "Completed {total_tests} tests in {elapsed:?}");
-                break;
+                break EndCondition::Success(elapsed);
             }
 
             let msg = rx.recv().unwrap();
-            msg.handle(tests, out);
-        }
+            msg.handle(tests, out, &mp);
+        };
 
+        drop(mp);
         assert_eq!(rx.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
+
+        match end_condition {
+            EndCondition::Timeout => {
+                out.write_sout(format!("Timeout of {:?} reached", config.timeout))
+            }
+            EndCondition::Success(elapsed) => {
+                out.write_sout(format!("Completed {total_tests} tests in {elapsed:?}"))
+            }
+        }
     });
 
     Instant::now() - start
 }
 
-fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Outputs) -> ExitCode {
-    writeln!(out, "\nResults:");
+fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCode {
+    out.write_sout(format!("\n\nResults:"));
 
     let mut failed_tests = 0;
 
@@ -288,28 +287,37 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Outputs) -> Exi
             executed,
             failures,
             elapsed,
+            result,
         } = t.completed.as_ref().unwrap();
 
-        let stat = if *failures > 0 { "FAILURE" } else { "SUCCESS" };
+        let stat = if result.is_err() {
+            "ERROR"
+        } else if *failures > 0 {
+            "FAILURE"
+        } else {
+            "SUCCESS"
+        };
 
-        writeln!(
-            out,
-            "    {stat} for test '{name}'. {passed}/{executed} passed in {elapsed:?}",
+        out.write_sout(format!(
+            "    {stat} for generator '{name}'. {passed}/{executed} passed in {elapsed:?}",
             name = t.name,
             passed = executed - failures,
-        );
+        ));
 
-        if *failures > 0 {
+        if let Err(reason) = result {
+            out.write_sout(format!("      reason: {reason}"));
+        }
+
+        if *failures > 0 || result.is_err() {
             failed_tests += 1;
         }
     }
 
-    writeln!(
-        out,
+    out.write_sout(format!(
         "{}/{} tests succeeded in {total_elapsed:?}",
         tests.len() - failed_tests,
         tests.len()
-    );
+    ));
 
     if failed_tests > 0 {
         ExitCode::FAILURE
@@ -330,16 +338,13 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let mut g = G::new();
         let mut executed = 0;
         let mut failures = 0;
+        let mut result = Ok(());
 
         let update_increment = (est / 100).max(1);
-
         let started = Instant::now();
 
         while let Some(s) = g.next() {
             executed += 1;
-            if executed > est {
-                est = executed
-            };
 
             // Send periodic updates
             if executed % update_increment == 0 {
@@ -347,7 +352,6 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
 
                 tx.send(Msg::new::<F, G>(Update::Progress {
                     executed,
-                    total: est,
                     duration_each_us: (elapsed.as_micros() / u128::from(executed))
                         .try_into()
                         .unwrap(),
@@ -356,10 +360,21 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         }
 
         let elapsed = Instant::now() - started;
+
+        // Warn about bad estimates
+        if executed > est {
+            result = Err(format!(
+                "executed tests > estimated ({executed} {est}) for {}",
+                G::NAME
+            )
+            .into());
+        }
+
         tx.send(Msg::new::<F, G>(Update::Completed(Completed {
             executed,
             failures,
             elapsed,
+            result,
         })));
     });
 }
@@ -378,27 +393,34 @@ pub fn log_file() -> (fs::File, String) {
     )
 }
 
-struct Outputs<'a> {
+/// Tee output to the file and
+struct Tee<'a> {
     f: &'a fs::File,
-    stdout: io::StdoutLock<'a>,
 }
 
-/// Write to both stdout and the logfile
-impl<'a> Write for Outputs<'a> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // self.stdout.write(buf).and_then(|_| self.f.write(buf))
-        Ok(buf.len())
+impl<'a> Tee<'a> {
+    /// Write to both the file and above the multiprogress bar. Includes newline.
+    fn write_mp(&mut self, mb: &MultiProgress, s: impl Into<String>) {
+        let mut s = s.into();
+        s.push('\n');
+        self.f.write(s.as_bytes()).unwrap();
+        s.pop();
+        mb.println(s);
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        // self.stdout.flush().and_then(|_| self.f.flush())
-        Ok(())
+    /// Write to both the file and stdout. Includes newline.
+    fn write_sout(&mut self, s: impl Into<String>) {
+        let mut s = s.into();
+        s.push('\n');
+        self.f.write(s.as_bytes()).unwrap();
+        io::stdout().write(s.as_bytes()).unwrap();
     }
 }
 
 trait Int:
     Copy
     + fmt::Debug
+    + fmt::Display
     + fmt::LowerHex
     + ops::Add<Output = Self>
     + ops::Sub<Output = Self>
@@ -410,11 +432,12 @@ trait Int:
     + ops::AddAssign
     + ops::BitAndAssign
     + ops::BitOrAssign
-    + TryInto<u32, Error: fmt::Debug>
     + From<u8>
     + TryFrom<i8>
     + TryFrom<u64>
+    + TryFrom<u128>
     + TryInto<u64, Error: fmt::Debug>
+    + TryInto<u32, Error: fmt::Debug>
     + ToBigInt
     + PartialOrd
     + Integer
@@ -536,8 +559,8 @@ impl_float!(f32, u32, 32; f64, u64, 64);
 
 /// Implement this on
 trait Generator<F: Float>: 'static {
-    // trait Generator<F: Float>: Sized + 'static {
     const NAME: &'static str;
+    const SHORT_NAME: &'static str;
 
     /// Approximate number of tests that will be run
     fn estimated_tests() -> u64;

@@ -108,7 +108,7 @@ fn check(correct: bool, input: &str, failure: Failure) -> Result<(), Update> {
         Ok(())
     } else {
         Err(Update::Failure {
-            f: failure,
+            fail: failure,
             input: input.into(),
         })
     }

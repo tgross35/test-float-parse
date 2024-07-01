@@ -13,14 +13,15 @@ pub struct ShortDecimals {
 
 impl<F: Float> Generator<F> for ShortDecimals {
     const NAME: &'static str = "short decimals";
+    const SHORT_NAME: &'static str = "short dec";
 
     fn estimated_tests() -> u64 {
-        (COEFF_MAX * EXP_MAX * 2).into()
+        ((COEFF_MAX - 1) * (EXP_MAX - 1) * 2).into()
     }
 
     fn new() -> Self {
         let iter = (0..EXP_MAX)
-            .flat_map(move |exp| (0..COEFF_MAX).map(move |coeff| (exp, coeff)))
+            .flat_map(|exp| (0..COEFF_MAX).map(move |coeff| (exp, coeff)))
             // If it ends in zeros, the parser will strip those (and adjust the exponent),
             // which almost always (except for exponents near +/- 300) result in an input
             // equivalent to something we already generate in a different way.
