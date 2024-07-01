@@ -2,10 +2,9 @@
 
 mod validate;
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use num::bigint::ToBigInt;
 use num::Integer;
-// use pbr::{MultiBar, Pipe, ProgressBar};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::any::{type_name, TypeId};
 use std::collections::HashMap;
 use std::io::prelude::*;
@@ -18,7 +17,7 @@ use validate::FloatConstants;
 
 mod gen {
     // pub mod long_fractions;
-    // pub mod short_decimals;
+    pub mod short_decimals;
     pub mod subnorm;
     // pub mod u64_pow2;
 }
@@ -188,7 +187,6 @@ pub fn run(cfg: &Config) -> ExitCode {
 
     tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
     // TODO: pop tests that don't match the filter
-    dbg!(&tests);
 
     let (logfile, logfile_name) = log_file();
     let mut out = Outputs {
@@ -207,6 +205,7 @@ pub fn run(cfg: &Config) -> ExitCode {
 fn register_float<F: Float>(v: &mut Vec<TestInfo>) {
     register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(v);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(v);
+    register_generator_for_float::<F, gen::short_decimals::ShortDecimals>(v);
 }
 
 fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>) {
@@ -226,8 +225,6 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
     };
     v.push(info)
 }
-
-// struct X(Box<dyn Generator<f32>>);
 
 /// Run all tests
 ///
