@@ -74,11 +74,12 @@ impl<F: Float> Generator<F> for LargeInt {
 
     fn estimated_tests() -> u64 {
         u64::try_from(
-            i128::from(LARGE_POWERS.end + 1 - LARGE_POWERS.start)
+            (i128::from(LARGE_POWERS.end - LARGE_POWERS.start)
+                + i128::try_from(Self::EDGE_CASES.len()).unwrap())
                 * (LARGE_PERTURBATIONS.end() + 1 - LARGE_PERTURBATIONS.start()),
         )
         .unwrap()
-            + Self::EDGE_CASES.len() as u64
+        // + Self::EDGE_CASES.len() as u64
     }
 
     fn new() -> Self {
