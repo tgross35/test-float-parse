@@ -1,5 +1,6 @@
 use crate::validate;
 use crate::{Float, Generator, Int};
+use std::cmp::min;
 use std::fmt::Write;
 use std::mem::transmute;
 use std::sync::LazyLock;
@@ -59,12 +60,6 @@ impl<F: Float> Generator<F> for SubnormEdge<F> {
     }
 }
 
-pub struct SubnormComplete<F: Float> {
-    num: F::Int,
-    // edge_case_iter: std::slice::Iter<'static, F::Int>,
-    buf: String,
-}
-
 impl<F: Float> SubnormComplete<F> {
     /// Shorthand
     const I1: F::Int = F::Int::ONE;
@@ -117,6 +112,12 @@ impl<F: Float> SubnormComplete<F> {
     // ];
 }
 
+/// Brute force tests
+pub struct SubnormComplete<F: Float> {
+    num: F::Int,
+    buf: String,
+}
+
 impl<F: Float> Generator<F> for SubnormComplete<F> {
     const NAME: &'static str = "subnorm";
 
@@ -130,7 +131,7 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
     fn estimated_tests() -> u64 {
         // TODO
         // Self::edge_cases().len() as u64 + 0
-        1000
+        min(Self::linspace_max(), F::MAN_MASK).try_into().unwrap()
     }
 
     // fn next_edge_caxse<'a>(&'a mut self) -> Option<&'a str> {
@@ -147,7 +148,8 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
         if self.num < Self::linspace_max() {
             self.num += F::Int::ONE;
         } else {
-            todo!()
+            // todo!()
+            return None; // TODO
         }
 
         Some(&self.buf)

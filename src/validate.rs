@@ -1,66 +1,120 @@
-use num::{BigInt, BigRational, FromPrimitive};
+use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive};
 
-use crate::{Float, Int};
-use bigdecimal::BigDecimal;
-use std::{any::type_name, str::FromStr};
+use crate::{Failure, Float, Int, Update};
+// use bigdecimal::BigDecimal;
+use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
 
+pub struct Constants {
+    min_subnormal: BigRational,
+    max: BigRational,
+    zero_cutoff: BigRational,
+    inf_cutoff: BigRational,
+    neg_inf_cutoff: BigRational,
+    powers_of_two: BTreeMap<i32, BigRational>,
+    half_ulp: BTreeMap<i32, BigRational>,
+}
+
+impl Constants {
+    fn new<F: Float>() -> Self {
+        let two_int = &BigInt::from_u32(2).unwrap();
+        let two = &BigRational::from_integer(2.into());
+
+        let min_subnormal = two.pow(-(F::EXP_BIAS + F::MAN_BITS - 1).to_signed());
+        let max = (two - two.pow(-F::MAN_BITS.to_signed())) * (two.pow(F::EXP_BIAS.to_signed()));
+        let zero_cutoff = &min_subnormal / two_int;
+        let inf_cutoff = &max * two_int.pow(F::EXP_BIAS - F::MAN_BITS - 1);
+        let neg_inf_cutoff = -&inf_cutoff;
+
+        let powers_of_two: BTreeMap<i32, _> = (-1100_i32..1100).map(|n| (n, two.pow(n))).collect();
+        let mut half_ulp = powers_of_two.clone();
+        half_ulp.iter_mut().for_each(|(_k, v)| *v = &*v / two);
+
+        Self {
+            min_subnormal,
+            max,
+            zero_cutoff,
+            inf_cutoff,
+            neg_inf_cutoff,
+            powers_of_two,
+            half_ulp,
+        }
+    }
+}
+
+static F32_CONSTANTS: LazyLock<Constants> = LazyLock::new(|| Constants::new::<f32>());
+static F64_CONSTANTS: LazyLock<Constants> = LazyLock::new(|| Constants::new::<f64>());
+
+pub trait FloatConstants {
+    fn constants() -> &'static Constants;
+}
+
+impl FloatConstants for f32 {
+    fn constants() -> &'static Constants {
+        &F32_CONSTANTS
+    }
+}
+
+impl FloatConstants for f64 {
+    fn constants() -> &'static Constants {
+        &F64_CONSTANTS
+    }
+}
+
+/// The result of parsing to a float type
 #[derive(Debug, PartialEq)]
-enum FRes<F: Float> {
+enum FloatRes<F: Float> {
     Inf,
     NegInf,
     Zero,
-    Other(F::SInt, i32),
+    Representable { sig: F::SInt, exp: i32 },
 }
 
-pub fn validate<F: Float>(input: &str) {
-    let output: F = input.parse().unwrap_or_else(|e| {
+pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
+    let parsed: F = input.parse().unwrap_or_else(|e| {
         panic!(
             "parsing failed for {}: {e}. Input: {input}",
             type_name::<F>()
         )
     });
 
-    let decoded = decode(output);
+    // Parsed float, decoded into significand and exponent
+    let decoded = decode(parsed);
+    // Float parsed separately into a rational
+    let rational = parse_ratioinal(input);
 
-    let two = &BigInt::from_u32(2).unwrap();
-    let frac_2_0 = &BigRational::from_integer(2.into());
-
-    let min_subnormal = frac_2_0.pow(-(F::EXP_BIAS + F::MAN_BITS - 1).to_signed());
-    let max = (frac_2_0 - frac_2_0.pow(-F::MAN_BITS.to_signed()))
-        * (frac_2_0.pow(F::EXP_BIAS.to_signed()));
-    let zero_cutoff = min_subnormal / two;
-    let inf_cutoff = max * two.pow(F::EXP_BIAS - F::MAN_BITS - 1);
-
-    // let two = &BigInt::from_u32(2).unwrap();
-    // let min_subnormal_bd = BigDecimal::new(two.pow(F::EXP_BIAS + F::MAN_BITS - 1), 0).inverse();
-    // let max_bd =
-    //     (two - BigDecimal::new(two.pow(F::MAN_BITS), 0).inverse()) * (two.pow(F::EXP_BIAS));
-    // let zero_cutoff_bd = min_subnormal_bd / 2;
-    // let int_cutoff_bd = max_bd * two.pow(F::EXP_BIAS - F::MAN_BITS - 1);
-
-    // let min_subnormal = frac_2_0.pow(-(F::EXP_BIAS + F::MAN_BITS - 1).to_signed());
-    // let max = (frac_2_0 - frac_2_0.pow(-F::MAN_BITS.to_signed()))
-    //     * (frac_2_0.pow(F::EXP_BIAS.to_signed()));
-    // let zero_cutoff = min_subnormal / two;
-    // let inf_cutoff = max * two.pow(F::EXP_BIAS - F::MAN_BITS - 1);
-
-    // let max_ulp = F::EXP_BIAS - F::MAN_BITS;
-    // let max = (two - frac_2_0.pow(-(F::MAN_BITS as i32))) * ;
-
-    // let min = frac_2_0 - frac_2_0.pow(-(F::MAN_BITS as i32));
-    // let min = frac_2_0 - frac_2_0.pow(-(F::MAN_BITS as i32));
-    // let zero_cutoff = min_subnormal / two;
-    // let inf_cutoff = min_subnormal / two;
+    let consts = F::constants();
 
     match decoded {
-        FRes::Zero => {}
-        FRes::Inf => todo!(),
-        FRes::NegInf => todo!(),
-        FRes::Other(_, _) => todo!(),
+        FloatRes::Zero => check(
+            rational <= consts.zero_cutoff,
+            input,
+            Failure::RoundedToZero,
+        ),
+        FloatRes::Inf => check(rational >= consts.inf_cutoff, input, Failure::RoundedToInf),
+        FloatRes::NegInf => check(
+            rational <= consts.neg_inf_cutoff,
+            input,
+            Failure::RoundedToNegInf,
+        ),
+        FloatRes::Representable { sig, exp } => {
+            let approx = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
+            Ok(())
+        }
     }
 }
 
-fn decode<F: Float>(f: F) -> FRes<F> {
+fn check(correct: bool, input: &str, failure: Failure) -> Result<(), Update> {
+    if correct {
+        Ok(())
+    } else {
+        Err(Update::Failure {
+            f: failure,
+            input: input.into(),
+        })
+    }
+}
+
+fn decode<F: Float>(f: F) -> FloatRes<F> {
     let ione = F::SInt::ONE;
     let izero = F::SInt::ZERO;
 
@@ -72,14 +126,14 @@ fn decode<F: Float>(f: F) -> FRes<F> {
         exponent += 1;
 
         if mantissa == izero {
-            return FRes::Zero;
+            return FloatRes::Zero;
         }
     } else if exponent == F::EXP_MAX {
         assert_eq!(mantissa, izero, "Unexpected NaN for {}", f.to_bits().hex());
         if f.is_sign_negative() {
-            return FRes::NegInf;
+            return FloatRes::NegInf;
         } else {
-            return FRes::Inf;
+            return FloatRes::Inf;
         };
     } else {
         // Set implicit bit
@@ -95,7 +149,10 @@ fn decode<F: Float>(f: F) -> FRes<F> {
         mantissa = mantissa.wrapping_neg();
     }
 
-    FRes::Other(mantissa, exponent_s)
+    FloatRes::Representable {
+        sig: mantissa,
+        exp: exponent_s,
+    }
 }
 
 fn parse_ratioinal(s: &str) -> BigRational {

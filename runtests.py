@@ -98,14 +98,15 @@ except ImportError:  # Python 2
 
 NUM_WORKERS = 2
 UPDATE_EVERY_N = 50000
-INF = namedtuple('INF', '')()
-NEG_INF = namedtuple('NEG_INF', '')()
-ZERO = namedtuple('ZERO', '')()
+INF = namedtuple("INF", "")()
+NEG_INF = namedtuple("NEG_INF", "")()
+ZERO = namedtuple("ZERO", "")()
 MAILBOX = None  # The queue for reporting errors to the main process.
 STDOUT_LOCK = threading.Lock()
 test_name = None
 child_processes = []
 exit_status = 0
+
 
 def msg(*args):
     with STDOUT_LOCK:
@@ -115,7 +116,7 @@ def msg(*args):
 
 def write_errors():
     global exit_status
-    f = open("errors.txt", 'w')
+    f = open("errors.txt", "w")
     have_seen_error = False
     while True:
         args = MAILBOX.get()
@@ -134,7 +135,7 @@ def write_errors():
 def cargo():
     print("compiling tests")
     sys.stdout.flush()
-    check_call(['cargo', 'build', '--release'])
+    check_call(["cargo", "build", "--release"])
 
 
 def run(test):
@@ -143,15 +144,17 @@ def run(test):
 
     t0 = time.perf_counter()
     msg("setting up supervisor")
-    command = ['cargo', 'run', '--bin', test, '--release']
-    proc = Popen(command, bufsize=1<<20 , stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    command = ["cargo", "run", "--bin", test, "--release"]
+    proc = Popen(command, bufsize=1 << 20, stdin=PIPE, stdout=PIPE, stderr=PIPE)
     done = multiprocessing.Value(ctypes.c_bool)
-    queue = multiprocessing.Queue(maxsize=5)#(maxsize=1024)
+    queue = multiprocessing.Queue(maxsize=5)  # (maxsize=1024)
     workers = []
     for n in range(NUM_WORKERS):
-        worker = multiprocessing.Process(name='Worker-' + str(n + 1),
-                                         target=init_worker,
-                                         args=[test, MAILBOX, queue, done])
+        worker = multiprocessing.Process(
+            name="Worker-" + str(n + 1),
+            target=init_worker,
+            args=[test, MAILBOX, queue, done],
+        )
         workers.append(worker)
         child_processes.append(worker)
     for worker in workers:
@@ -174,7 +177,7 @@ def interact(proc, queue):
         line = proc.stdout.readline()
         if not line:
             continue
-        assert line.endswith(b'\n'), "incomplete line: " + repr(line)
+        assert line.endswith(b"\n"), "incomplete line: " + repr(line)
         queue.put(line)
         n += 1
         if n % UPDATE_EVERY_N == 0:
@@ -183,7 +186,7 @@ def interact(proc, queue):
     rest, stderr = proc.communicate()
     if stderr:
         msg("rust stderr output:", stderr)
-    for line in rest.split(b'\n'):
+    for line in rest.split(b"\n"):
         if not line:
             continue
         queue.put(line)
@@ -191,9 +194,9 @@ def interact(proc, queue):
 
 def main():
     global MAILBOX
-    files = glob('src/bin/*.rs')
+    files = glob("src/bin/*.rs")
     basenames = [os.path.basename(i) for i in files]
-    all_tests = [os.path.splitext(f)[0] for f in basenames if not f.startswith('_')]
+    all_tests = [os.path.splitext(f)[0] for f in basenames if not f.startswith("_")]
     args = sys.argv[1:]
     if args:
         tests = [test for test in all_tests if test in args]
@@ -218,8 +221,8 @@ def main():
 # ---- Worker thread code ----
 
 
-POW2 = { e: Fraction(2) ** e for e in range(-1100, 1100) }
-HALF_ULP = { e: (Fraction(2) ** e)/2 for e in range(-1100, 1100) }
+POW2 = {e: Fraction(2) ** e for e in range(-1100, 1100)}
+HALF_ULP = {e: (Fraction(2) ** e) / 2 for e in range(-1100, 1100)}
 DONE_FLAG = None
 
 
@@ -250,7 +253,7 @@ def do_work(queue):
             else:
                 continue
         bin64, bin32, text = line.rstrip().split()
-        validate(bin64, bin32, text.decode('utf-8'))
+        validate(bin64, bin32, text.decode("utf-8"))
 
 
 def decode_binary64(x):
@@ -261,7 +264,7 @@ def decode_binary64(x):
     """
     x = binascii.unhexlify(x)
     assert len(x) == 8, repr(x)
-    [bits] = struct.unpack(b'>Q', x)
+    [bits] = struct.unpack(b">Q", x)
     if bits == 0:
         return ZERO
     exponent = (bits >> 52) & 0x7FF
@@ -294,7 +297,7 @@ def decode_binary32(x):
     """
     x = binascii.unhexlify(x)
     assert len(x) == 4, repr(x)
-    [bits] = struct.unpack(b'>I', x)
+    [bits] = struct.unpack(b">I", x)
     if bits == 0:
         return ZERO
     exponent = (bits >> 23) & 0xFF
@@ -320,14 +323,15 @@ def decode_binary32(x):
 
 MIN_SUBNORMAL_DOUBLE = Fraction(2) ** -1074
 MIN_SUBNORMAL_SINGLE = Fraction(2) ** -149  # XXX unsure
-MAX_DOUBLE = (2 - Fraction(2) ** -52) * (2 ** 1023)
-MAX_SINGLE = (2 - Fraction(2) ** -23) * (2 ** 127)
+MAX_DOUBLE = (2 - Fraction(2) ** -52) * (2**1023)
+MAX_SINGLE = (2 - Fraction(2) ** -23) * (2**127)
 MAX_ULP_DOUBLE = 1023 - 52
 MAX_ULP_SINGLE = 127 - 23
 DOUBLE_ZERO_CUTOFF = MIN_SUBNORMAL_DOUBLE / 2
 DOUBLE_INF_CUTOFF = MAX_DOUBLE + 2 ** (MAX_ULP_DOUBLE - 1)
 SINGLE_ZERO_CUTOFF = MIN_SUBNORMAL_SINGLE / 2
 SINGLE_INF_CUTOFF = MAX_SINGLE + 2 ** (MAX_ULP_SINGLE - 1)
+
 
 def validate(bin64, bin32, text):
     try:
@@ -352,6 +356,7 @@ def validate(bin64, bin32, text):
         validate_normal(text, real, sig, k, "f64")
     else:
         assert 0, "didn't handle binary64"
+
     if single is ZERO:
         if real > SINGLE_ZERO_CUTOFF:
             record_special_error(text, "f32 zero")
@@ -366,6 +371,7 @@ def validate(bin64, bin32, text):
         validate_normal(text, real, sig, k, "f32")
     else:
         assert 0, "didn't handle binary32"
+
 
 def record_special_error(text, descr):
     send_error_to_supervisor(text.strip(), "wrongly rounded to", descr)
@@ -386,9 +392,9 @@ def record_normal_error(text, error, k, kind):
     try:
         err_repr = float(relative_error)
     except ValueError:
-        err_repr = str(err_repr).replace('/', ' / ')
+        err_repr = str(err_repr).replace("/", " / ")
     send_error_to_supervisor(err_repr, "ULP error on", text, "(" + kind + ")")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

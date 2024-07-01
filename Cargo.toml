@@ -10,6 +10,7 @@ resolver = "1"
 [dependencies]
 bigdecimal = "0.4.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+indicatif = { version = "0.17.8", default-features = false }
 num = "0.4.3"
 pbr = "1.1.1"
 rand_chacha = "0.3"
