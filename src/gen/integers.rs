@@ -22,7 +22,6 @@ const LARGE_PERTURBATIONS: RangeInclusive<i128> = -256..=256;
 /// Test all integers up to 2 ^ MAX_POW2
 pub struct SmallInt {
     iter: RangeInclusive<i32>,
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for SmallInt {
@@ -36,17 +35,16 @@ impl<F: Float> Generator<F> for SmallInt {
     }
 
     fn new() -> Self {
-        Self {
-            iter: SMALL_VALUES,
-            buf: String::new(),
-        }
+        Self { iter: SMALL_VALUES }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl Iterator for SmallInt {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let num = self.iter.next()?;
-        self.buf.clear();
-        write!(self.buf, "{num}");
-        Some(self.buf.as_str())
+        Some(format!("{num}"))
     }
 }
 
@@ -93,11 +91,13 @@ impl<F: Float> Generator<F> for LargeInt {
             buf: String::new(),
         }
     }
+}
+impl Iterator for LargeInt {
+    type Item = String;
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+    fn next(&mut self) -> Option<Self::Item> {
         let num = self.iter.next()?;
         self.buf.clear();
-        write!(self.buf, "{num}");
-        Some(self.buf.as_str())
+        Some(format!("{num}"))
     }
 }

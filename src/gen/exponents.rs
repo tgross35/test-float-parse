@@ -13,9 +13,6 @@ const LARGE_EXP_RANGE: Range<u32> = 300..350;
 
 pub struct SmallExponents {
     iter: Box<dyn Iterator<Item = String>>,
-    /// Even though the iterator allocates, we still need the internal buffer
-    /// to meet the function signature.
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for SmallExponents {
@@ -41,23 +38,20 @@ impl<F: Float> Generator<F> for SmallExponents {
 
         Self {
             iter: Box::new(iter),
-            buf: String::new(),
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
-        self.iter.next().map(|s| {
-            self.buf = s;
-            self.buf.as_str()
-        })
+impl Iterator for SmallExponents {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }
 
 pub struct LargeExponents {
     iter: Box<dyn Iterator<Item = String>>,
-    /// Even though the iterator allocates, we still need the internal buffer
-    /// to meet the function signature.
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for LargeExponents {
@@ -75,15 +69,15 @@ impl<F: Float> Generator<F> for LargeExponents {
 
         Self {
             iter: Box::new(iter),
-            buf: String::new(),
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
-        self.iter.next().map(|s| {
-            self.buf = s;
-            self.buf.as_str()
-        })
+impl Iterator for LargeExponents {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }
 
@@ -112,11 +106,12 @@ impl<F: Float> Generator<F> for LargeNegExponents {
             buf: String::new(),
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
-        self.iter.next().map(|s| {
-            self.buf = s;
-            self.buf.as_str()
-        })
+impl Iterator for LargeNegExponents {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }

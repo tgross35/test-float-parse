@@ -9,7 +9,6 @@ use std::sync::LazyLock;
 pub struct SubnormEdge<F: Float> {
     cases: [F::Int; 6],
     index: usize,
-    buf: String,
 }
 
 impl<F: Float> SubnormEdge<F> {
@@ -43,18 +42,22 @@ impl<F: Float> Generator<F> for SubnormEdge<F> {
         Self {
             cases: Self::edge_cases(),
             index: 0,
-            buf: String::new(),
         }
     }
 
     fn estimated_tests() -> u64 {
         Self::edge_cases().len().try_into().unwrap()
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl<F: Float> Iterator for SubnormEdge<F> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let i = self.cases.get(self.index)?;
         self.index += 1;
-        Some(update_buf_from_bits::<F>(&mut self.buf, *i))
+
+        Some(format!("{:e}", F::from_bits(*i)))
     }
 }
 
@@ -73,7 +76,6 @@ impl<F: Float> SubnormComplete<F> {
 /// Brute force tests
 pub struct SubnormComplete<F: Float> {
     num: F::Int,
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for SubnormComplete<F> {
@@ -81,22 +83,23 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
     const SHORT_NAME: &'static str = "subnorm ";
 
     fn new() -> Self {
-        Self {
-            num: F::Int::ZERO,
-            buf: String::new(),
-        }
+        Self { num: F::Int::ZERO }
     }
 
     fn estimated_tests() -> u64 {
         min(Self::linspace_max(), F::MAN_MASK).try_into().unwrap()
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl<F: Float> Iterator for SubnormComplete<F> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.num >= F::MAN_MASK {
             return None;
         }
 
-        update_buf_from_bits::<F>(&mut self.buf, self.num);
+        let ret = format!("{:e}", F::from_bits(self.num));
 
         if self.num < Self::linspace_max() {
             self.num += F::Int::ONE;
@@ -105,6 +108,6 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
             return None; // TODO
         }
 
-        Some(&self.buf)
+        Some(ret)
     }
 }

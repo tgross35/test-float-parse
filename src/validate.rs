@@ -4,6 +4,7 @@ use crate::{Failure, Float, Int, Update};
 // use bigdecimal::BigDecimal;
 use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
 
+#[derive(Debug)]
 pub struct Constants {
     min_subnormal: BigRational,
     max: BigRational,
@@ -83,6 +84,13 @@ pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
     let rational = parse_ratioinal(input);
 
     let consts = F::constants();
+
+    dbg!(
+        &decoded,
+        &rational,
+        &consts.zero_cutoff,
+        &consts.neg_inf_cutoff
+    );
 
     match decoded {
         FloatRes::Zero => check(
@@ -194,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
+    fn test_parse_rational() {
         assert_eq!(
             parse_ratioinal("1234"),
             BigRational::new(1234.into(), 1.into())
@@ -230,5 +238,10 @@ mod tests {
                 10000000000000000000000_i128.into()
             )
         );
+    }
+
+    #[test]
+    fn test_validate() {
+        validate::<f32>("1").unwrap();
     }
 }

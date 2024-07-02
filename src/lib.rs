@@ -202,7 +202,7 @@ where
     register_generator_for_float::<F, gen::integers::SmallInt>(tests);
     register_generator_for_float::<F, gen::integers::LargeInt>(tests);
     register_generator_for_float::<F, gen::long_fractions::RepeatingDecimal>(tests);
-    register_generator_for_float::<F, gen::fuzz::Fuzz>(tests);
+    register_generator_for_float::<F, gen::fuzz::Fuzz<F>>(tests);
 }
 
 /// Register a single test generator for a specific float
@@ -239,9 +239,11 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
     let (tx, rx) = mpsc::channel::<Msg>();
     let total_tests = tests.len();
     let mp = MultiProgress::new();
-    let pb_style = ProgressStyle::with_template("[{elapsed}] {bar:40.cyan/blue} {pos}/{len} {msg}")
-        .unwrap()
-        .progress_chars("##-");
+    let pb_style = ProgressStyle::with_template(
+        "[{elapsed}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}",
+    )
+    .unwrap()
+    .progress_chars("##-");
 
     for test in tests.iter() {
         out.write_sout(format!("Launching test '{}'", test.name));
@@ -365,7 +367,7 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         tx.send(Msg::new::<F, G>(Update::Started));
 
         let mut est = G::estimated_tests();
-        let mut g = G::new();
+        let mut gen = G::new();
         let mut executed = 0;
         let mut failures = 0;
         let mut result = Ok(());
@@ -373,8 +375,13 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let update_increment = (est / 100).clamp(1, 10_000);
         let started = Instant::now();
 
-        while let Some(s) = g.next() {
+        for test_str in gen {
             executed += 1;
+
+            match validate::validate::<F>(&test_str) {
+                Ok(()) => (),
+                Err(e) => tx.send(Msg::new::<F, G>(e)).unwrap(),
+            };
 
             // Send periodic updates
             if executed % update_increment == 0 {
@@ -385,7 +392,8 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
                     duration_each_us: (elapsed.as_micros() / u128::from(executed))
                         .try_into()
                         .unwrap(),
-                }));
+                }))
+                .unwrap();
             }
         }
 
@@ -535,7 +543,7 @@ macro_rules! impl_int {
 impl_int!(u32, i32; u64, i64);
 
 trait Float:
-    Copy + fmt::LowerExp + FromStr<Err: fmt::Display> + FloatConstants + Sized + 'static
+    Copy + fmt::Debug + fmt::LowerExp + FromStr<Err: fmt::Display> + FloatConstants + Sized + 'static
 {
     /// Unsigned integer of same width
     type Int: Int<Signed = Self::SInt>;
@@ -600,7 +608,7 @@ macro_rules! impl_float {
 impl_float!(f32, u32, 32; f64, u64, 64);
 
 /// Implement this on
-trait Generator<F: Float>: 'static {
+trait Generator<F: Float>: Iterator<Item = String> + 'static {
     const NAME: &'static str;
     const SHORT_NAME: &'static str;
 
@@ -610,8 +618,8 @@ trait Generator<F: Float>: 'static {
     /// Create this generator
     fn new() -> Self;
 
-    /// Return the next number in this generator to be tested
-    fn next<'a>(&'a mut self) -> Option<&'a str>;
+    // /// Return the next number in this generator to be tested
+    // fn next<'a>(&'a mut self) -> Option<&'a str>;
 }
 
 const fn const_min(a: u32, b: u32) -> u32 {

@@ -17,7 +17,7 @@
 //     }
 // }
 
-use std::ops::Range;
+use std::{marker::PhantomData, ops::Range};
 
 use crate::{update_buf_from_bits, Float, Generator, Int, SEED};
 use rand_chacha::{
@@ -27,13 +27,14 @@ use rand_chacha::{
 
 const FUZZ_COUNT: u64 = 10_000_000;
 
-pub struct Fuzz {
+pub struct Fuzz<F> {
     iter: Range<u64>,
     rng: ChaCha8Rng,
-    buf: String,
+    /// Allow us to use generics in `Iterator`
+    marker: PhantomData<F>,
 }
 
-impl<F: Float> Generator<F> for Fuzz {
+impl<F: Float> Generator<F> for Fuzz<F> {
     const NAME: &'static str = "fuzz";
     const SHORT_NAME: &'static str = "fuzz";
 
@@ -47,17 +48,21 @@ impl<F: Float> Generator<F> for Fuzz {
         Self {
             iter: 0..FUZZ_COUNT,
             rng,
-            buf: String::new(),
+            marker: PhantomData,
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl<F: Float> Iterator for Fuzz<F> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let _ = self.iter.next()?;
 
         let mut buf = <F::Int as Int>::Bytes::default();
         self.rng.fill_bytes(buf.as_mut());
         let i = F::Int::from_le_bytes(buf);
 
-        Some(update_buf_from_bits::<F>(&mut self.buf, i))
+        Some(format!("{:e}", F::from_bits(i)))
     }
 }

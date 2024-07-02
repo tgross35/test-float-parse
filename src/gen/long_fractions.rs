@@ -26,8 +26,12 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
             buf: PREFIX.to_owned(),
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl Iterator for RepeatingDecimal {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.digit > MAX_DIGIT {
             return None;
         }
@@ -46,6 +50,6 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
             self.digit += 1;
         }
 
-        Some(self.buf.as_str())
+        Some(self.buf.clone())
     }
 }

@@ -25,7 +25,6 @@ macro_rules! pow_iter {
 /// Test all numbers that include three 1s in the binary representation
 pub struct FewOnes<F: Float> {
     iter: Box<dyn Iterator<Item = F::Int>>,
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for FewOnes<F>
@@ -47,14 +46,15 @@ where
 
         Self {
             iter: Box::new(iter),
-            buf: String::new(),
         }
     }
+}
 
-    fn next<'a>(&'a mut self) -> Option<&'a str> {
+impl<F: Float> Iterator for FewOnes<F> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let num = self.iter.next()?;
-        self.buf.clear();
-        write!(self.buf, "{num}");
-        Some(self.buf.as_str())
+        Some(format!("{num}"))
     }
 }
