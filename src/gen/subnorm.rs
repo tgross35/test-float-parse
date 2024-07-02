@@ -1,16 +1,9 @@
-use crate::validate;
+use crate::{update_buf_from_bits, validate};
 use crate::{Float, Generator, Int};
 use std::cmp::min;
 use std::fmt::Write;
 use std::mem::transmute;
 use std::sync::LazyLock;
-
-/// Turn the integer into a float then print it in exponential format
-fn update_buf_exp<F: Float>(s: &mut String, i: F::Int) -> &str {
-    s.clear();
-    write!(s, "{:e}", F::from_bits(i));
-    s
-}
 
 /// Spot check some edge cases for subnormals
 pub struct SubnormEdge<F: Float> {
@@ -61,7 +54,7 @@ impl<F: Float> Generator<F> for SubnormEdge<F> {
     fn next<'a>(&'a mut self) -> Option<&'a str> {
         let i = self.cases.get(self.index)?;
         self.index += 1;
-        Some(update_buf_exp::<F>(&mut self.buf, *i))
+        Some(update_buf_from_bits::<F>(&mut self.buf, *i))
     }
 }
 
@@ -103,7 +96,7 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
             return None;
         }
 
-        update_buf_exp::<F>(&mut self.buf, self.num);
+        update_buf_from_bits::<F>(&mut self.buf, self.num);
 
         if self.num < Self::linspace_max() {
             self.num += F::Int::ONE;

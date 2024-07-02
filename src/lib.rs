@@ -16,16 +16,16 @@ use time::{Duration, Instant};
 use validate::FloatConstants;
 
 mod gen {
+    pub mod exhaustive;
     pub mod exponents;
-    pub mod few_ones;
+    pub mod fuzz;
     pub mod integers;
+    pub mod long_fractions;
+    pub mod sparse;
     pub mod subnorm;
-    pub mod u64_pow2;
 }
 
-// Nothing up my sleeve: Just (PI - 3) in base 16.
-#[allow(dead_code)]
-pub const SEED: [u32; 3] = [0x243f_6a88, 0x85a3_08d3, 0x1319_8a2e];
+pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
 
 /// Message passed from a test runner to the host
 #[derive(Clone, Debug)]
@@ -165,9 +165,7 @@ pub struct Config {
 pub fn run(cfg: &Config) -> ExitCode {
     let mut tests = Vec::new();
 
-    register_float::<f32>(&mut tests);
-    register_float::<f64>(&mut tests);
-
+    register_tests(&mut tests);
     tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
     // TODO: pop tests that don't match the filter
 
@@ -182,19 +180,32 @@ pub fn run(cfg: &Config) -> ExitCode {
     ret
 }
 
-fn register_float<F: Float>(v: &mut Vec<TestInfo>)
+/// Configure tests to run
+fn register_tests(tests: &mut Vec<TestInfo>) {
+    register_float::<f32>(tests);
+    register_float::<f64>(tests);
+
+    // Don't run exhaustive for bits > 32, it would take years.
+    register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(tests);
+}
+
+/// Register all generators for a single float
+fn register_float<F: Float>(tests: &mut Vec<TestInfo>)
 where
     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
 {
-    register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(v);
-    register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(v);
-    register_generator_for_float::<F, gen::exponents::SmallExponents>(v);
-    register_generator_for_float::<F, gen::exponents::LargeExponents>(v);
-    register_generator_for_float::<F, gen::few_ones::FewOnes<F>>(v);
-    register_generator_for_float::<F, gen::integers::SmallInt>(v);
-    register_generator_for_float::<F, gen::integers::LargeInt>(v);
+    register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(tests);
+    register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(tests);
+    register_generator_for_float::<F, gen::exponents::SmallExponents>(tests);
+    register_generator_for_float::<F, gen::exponents::LargeExponents>(tests);
+    register_generator_for_float::<F, gen::sparse::FewOnes<F>>(tests);
+    register_generator_for_float::<F, gen::integers::SmallInt>(tests);
+    register_generator_for_float::<F, gen::integers::LargeInt>(tests);
+    register_generator_for_float::<F, gen::long_fractions::RepeatingDecimal>(tests);
+    register_generator_for_float::<F, gen::fuzz::Fuzz>(tests);
 }
 
+/// Register a single test generator for a specific float
 fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>) {
     let f_name = type_name::<F>();
     let gen_name = G::NAME;
@@ -238,16 +249,31 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
 
     let start = Instant::now();
 
-    thread::scope(move |scope| {
-        for test in tests.iter_mut() {
-            if test.run {
-                let mut pb = mp.add(ProgressBar::new(test.estimated_tests));
-                pb.set_style(pb_style.clone());
-                pb.set_message(test.short_name.clone());
-                test.pb = Some(pb);
+    let mut panic_drop_bars = Vec::new();
 
-                (test.launch)(scope, tx.clone(), &test);
-            }
+    for test in tests.iter_mut() {
+        let mut pb = mp.add(ProgressBar::new(test.estimated_tests));
+        pb.set_style(pb_style.clone());
+        pb.set_message(test.short_name.clone());
+        panic_drop_bars.push(pb.clone());
+        test.pb = Some(pb);
+    }
+
+    // indicatif likes to eat panic messages <https://github.com/console-rs/indicatif/issues/121>
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        for bar in &panic_drop_bars {
+            bar.abandon();
+            println!();
+            io::stdout().flush();
+            io::stderr().flush();
+        }
+        hook(info);
+    }));
+
+    thread::scope(move |scope| {
+        for test in tests.iter() {
+            (test.launch)(scope, tx.clone(), &test);
         }
 
         let end_condition = loop {
@@ -331,11 +357,11 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
 }
 
 fn launch_one<'s, F: Float, G: Generator<F>>(
-    s: &'s thread::Scope<'s, '_>,
+    scope: &'s thread::Scope<'s, '_>,
     tx: mpsc::Sender<Msg>,
     info: &TestInfo,
 ) {
-    s.spawn(move || {
+    scope.spawn(move || {
         tx.send(Msg::new::<F, G>(Update::Started));
 
         let mut est = G::estimated_tests();
@@ -344,7 +370,7 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let mut failures = 0;
         let mut result = Ok(());
 
-        let update_increment = (est / 100).max(1);
+        let update_increment = (est / 100).clamp(1, 10_000);
         let started = Instant::now();
 
         while let Some(s) = g.next() {
@@ -448,14 +474,16 @@ trait Int:
     + 'static
 {
     type Signed: Int;
+    type Bytes: Default + AsMut<[u8]>;
 
     const BITS: u32;
     const ZERO: Self;
     const ONE: Self;
+    const MAX: Self;
 
     fn to_signed(self) -> Self::Signed;
-
     fn wrapping_neg(self) -> Self;
+    fn from_le_bytes(bytes: Self::Bytes) -> Self;
 
     fn hex(self) -> String {
         format!("{:x}", self)
@@ -467,27 +495,37 @@ macro_rules! impl_int {
         $(
             impl Int for $uty {
                 type Signed = $sty;
+                type Bytes = [u8; Self::BITS as usize / 8];
                 const BITS: u32 = Self::BITS;
                 const ZERO: Self = 0;
                 const ONE: Self = 1;
+                const MAX: Self = Self::MAX;
                 fn to_signed(self) -> Self::Signed {
                     self.try_into().unwrap()
                 }
                 fn wrapping_neg(self) -> Self {
                     self.wrapping_neg()
                 }
+                fn from_le_bytes(bytes: Self::Bytes) -> Self {
+                    Self::from_be_bytes(bytes)
+                }
             }
 
             impl Int for $sty {
                 type Signed = Self;
+                type Bytes = [u8; Self::BITS as usize / 8];
                 const BITS: u32 = Self::BITS;
                 const ZERO: Self = 0;
                 const ONE: Self = 1;
+                const MAX: Self = Self::MAX;
                 fn to_signed(self) -> Self::Signed {
                     self
                 }
                 fn wrapping_neg(self) -> Self {
                     self.wrapping_neg()
+                }
+                fn from_le_bytes(bytes: Self::Bytes) -> Self {
+                    Self::from_be_bytes(bytes)
                 }
             }
         )+
@@ -582,4 +620,12 @@ const fn const_min(a: u32, b: u32) -> u32 {
     } else {
         b
     }
+}
+
+/// Turn the integer into a float then print it in exponential format
+fn update_buf_from_bits<F: Float>(s: &mut String, i: F::Int) -> &str {
+    use std::fmt::Write;
+    s.clear();
+    write!(s, "{:e}", F::from_bits(i));
+    s
 }
