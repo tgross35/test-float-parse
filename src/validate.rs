@@ -2,7 +2,7 @@ use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive};
 
 use crate::{Failure, Float, Int, Update};
 // use bigdecimal::BigDecimal;
-use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
+use std::{any::type_name, cmp::min, collections::BTreeMap, str::FromStr, sync::LazyLock};
 
 #[derive(Debug)]
 pub struct Constants {
@@ -62,12 +62,38 @@ impl FloatConstants for f64 {
 }
 
 /// The result of parsing to a float type
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum FloatRes<F: Float> {
     Inf,
     NegInf,
     Zero,
-    Representable { sig: F::SInt, exp: i32 },
+    Real {
+        /// The significand as a signed integer
+        sig: F::SInt,
+        /// The exponent
+        exp: i32,
+    },
+}
+
+impl<F: Float> FloatRes<F> {
+    fn normalize(self) -> Self {
+        match self {
+            Self::Inf => Self::Inf,
+            Self::NegInf => Self::NegInf,
+            Self::Zero => Self::Zero,
+            Self::Real { sig, exp } => {
+                if exp < 0 {
+                    let norm = min(sig.trailing_zeros(), exp.wrapping_neg().try_into().unwrap());
+                    Self::Real {
+                        sig: sig >> norm,
+                        exp: exp + i32::try_from(norm).unwrap(),
+                    }
+                } else {
+                    self
+                }
+            }
+        }
+    }
 }
 
 pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
@@ -85,13 +111,6 @@ pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
 
     let consts = F::constants();
 
-    dbg!(
-        &decoded,
-        &rational,
-        &consts.zero_cutoff,
-        &consts.neg_inf_cutoff
-    );
-
     match decoded {
         FloatRes::Zero => check(
             rational <= consts.zero_cutoff,
@@ -104,7 +123,7 @@ pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
             input,
             Failure::RoundedToNegInf,
         ),
-        FloatRes::Representable { sig, exp } => {
+        FloatRes::Real { sig, exp } => {
             let approx = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
             Ok(())
         }
@@ -127,16 +146,16 @@ fn decode<F: Float>(f: F) -> FloatRes<F> {
     let izero = F::SInt::ZERO;
 
     // let bits = output.to_bits();
-    let mut exponent = f.exponent();
+    let mut exponent_biased = f.exponent();
     let mut mantissa = f.mantissa().to_signed();
 
-    if exponent == 0 {
-        exponent += 1;
-
+    if exponent_biased == 0 {
         if mantissa == izero {
             return FloatRes::Zero;
         }
-    } else if exponent == F::EXP_MAX {
+
+        exponent_biased += 1;
+    } else if exponent_biased == F::EXP_SAT {
         assert_eq!(mantissa, izero, "Unexpected NaN for {}", f.to_bits().hex());
         if f.is_sign_negative() {
             return FloatRes::NegInf;
@@ -148,18 +167,18 @@ fn decode<F: Float>(f: F) -> FloatRes<F> {
         mantissa |= ione << F::MAN_BITS;
     }
 
-    let mut exponent_s = exponent as i32;
+    let mut exponent = exponent_biased as i32;
 
     // Adjust for bias and the rnage of the mantissa
-    exponent_s -= (F::EXP_BITS + F::MAN_BITS) as i32;
+    exponent -= (F::EXP_BIAS + F::MAN_BITS) as i32;
 
     if f.is_sign_negative() {
         mantissa = mantissa.wrapping_neg();
     }
 
-    FloatRes::Representable {
+    FloatRes::Real {
         sig: mantissa,
-        exp: exponent_s,
+        exp: exponent,
     }
 }
 
@@ -241,7 +260,58 @@ mod tests {
     }
 
     #[test]
+    fn test_decode() {
+        assert_eq!(decode(0f32), FloatRes::Zero);
+        assert_eq!(decode(f32::INFINITY), FloatRes::Inf);
+        assert_eq!(decode(f32::NEG_INFINITY), FloatRes::NegInf);
+        assert_eq!(
+            decode(1.0f32).normalize(),
+            FloatRes::Real { sig: 1, exp: 0 }
+        );
+        assert_eq!(
+            decode(-1.0f32).normalize(),
+            FloatRes::Real { sig: -1, exp: 0 }
+        );
+        assert_eq!(
+            decode(100.0f32).normalize(),
+            FloatRes::Real { sig: 100, exp: 0 }
+        );
+        assert_eq!(
+            decode(100.5f32).normalize(),
+            FloatRes::Real { sig: 201, exp: -1 }
+        );
+        assert_eq!(
+            decode(-4.004f32).normalize(),
+            FloatRes::Real {
+                sig: -8396997,
+                exp: -21
+            }
+        );
+        assert_eq!(
+            decode(0.0004f32).normalize(),
+            FloatRes::Real {
+                sig: 13743895,
+                exp: -35
+            }
+        );
+        assert_eq!(
+            decode(f32::from_bits(0x1)).normalize(),
+            FloatRes::Real { sig: 1, exp: -149 }
+        );
+    }
+
+    #[test]
     fn test_validate() {
+        validate::<f32>("0").unwrap();
+        validate::<f32>("-0").unwrap();
         validate::<f32>("1").unwrap();
+        validate::<f32>("-1").unwrap();
+        validate::<f32>("1.1").unwrap();
+        validate::<f32>("-1.1").unwrap();
+        validate::<f32>("1e10").unwrap();
+        validate::<f32>("1e1000").unwrap();
+        validate::<f32>("-1e1000").unwrap();
+        validate::<f32>("1e-1000").unwrap();
+        validate::<f32>("-1e-1000").unwrap();
     }
 }

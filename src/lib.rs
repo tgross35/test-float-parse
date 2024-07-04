@@ -472,8 +472,9 @@ trait Int:
     + ops::BitOrAssign
     + From<u8>
     + TryFrom<i8>
-    + TryFrom<u64>
-    + TryFrom<u128>
+    + TryFrom<u32, Error: fmt::Debug>
+    + TryFrom<u64, Error: fmt::Debug>
+    + TryFrom<u128, Error: fmt::Debug>
     + TryInto<u64, Error: fmt::Debug>
     + TryInto<u32, Error: fmt::Debug>
     + ToBigInt
@@ -491,6 +492,7 @@ trait Int:
 
     fn to_signed(self) -> Self::Signed;
     fn wrapping_neg(self) -> Self;
+    fn trailing_zeros(self) -> u32;
     fn from_le_bytes(bytes: Self::Bytes) -> Self;
 
     fn hex(self) -> String {
@@ -514,6 +516,9 @@ macro_rules! impl_int {
                 fn wrapping_neg(self) -> Self {
                     self.wrapping_neg()
                 }
+                fn trailing_zeros(self) -> u32 {
+                    self.trailing_zeros()
+                }
                 fn from_le_bytes(bytes: Self::Bytes) -> Self {
                     Self::from_be_bytes(bytes)
                 }
@@ -531,6 +536,9 @@ macro_rules! impl_int {
                 }
                 fn wrapping_neg(self) -> Self {
                     self.wrapping_neg()
+                }
+                fn trailing_zeros(self) -> u32 {
+                    self.trailing_zeros()
                 }
                 fn from_le_bytes(bytes: Self::Bytes) -> Self {
                     Self::from_be_bytes(bytes)
@@ -557,10 +565,13 @@ trait Float:
 
     /// Bits in the exponent
     const EXP_BITS: u32 = Self::BITS - Self::MAN_BITS - 1;
-    const EXP_MAX: u32 = (1 << Self::EXP_BITS) - 1;
-    const EXP_BIAS: u32 = Self::EXP_MAX >> 1;
 
-    // const MAN_MASK: Self::Int = (Self::Int::ONE << Self::MAN_BITS) - Self::Int::ONE;
+    /// A saturated exponent (all ones)
+    const EXP_SAT: u32 = (1 << Self::EXP_BITS) - 1;
+
+    /// The exponent bias, also its maximum value
+    const EXP_BIAS: u32 = Self::EXP_SAT >> 1;
+
     const MAN_MASK: Self::Int;
     const SIGN_MASK: Self::Int;
 
@@ -573,7 +584,7 @@ trait Float:
 
     /// Exponent without adjustment
     fn exponent(self) -> u32 {
-        (self.to_bits() & (!Self::SIGN_MASK) >> Self::MAN_BITS)
+        ((self.to_bits() >> Self::MAN_BITS) & Self::EXP_SAT.try_into().unwrap())
             .try_into()
             .unwrap()
     }
