@@ -17,7 +17,8 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
     const SHORT_NAME: &'static str = "dec rep";
 
     fn estimated_tests() -> u64 {
-        ((MAX_DIGIT + 1) * u32::try_from(MAX_LEN + 1 - PREFIX.len()).unwrap()).into()
+        u64::try_from((MAX_DIGIT + 1) * u32::try_from(MAX_LEN + 1 - PREFIX.len()).unwrap()).unwrap()
+            + 1
     }
 
     fn new() -> Self {

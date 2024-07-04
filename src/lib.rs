@@ -65,7 +65,7 @@ impl Msg {
                 out.write_mp(
                     mp,
                     format!(
-                        "Failure in '{}': {}. parsing {input}",
+                        "Failure in '{}': {}. parsing '{input}'",
                         test.name,
                         fail.msg()
                     ),
@@ -125,12 +125,12 @@ impl Failure {
 }
 
 #[derive(Debug)]
-struct TestInfo {
+pub struct TestInfo {
     id: TypeId,
     f_name: &'static str,
     gen_name: &'static str,
     gen_short_name: &'static str,
-    name: String,
+    pub name: String,
     short_name: String,
     run: bool,
     estimated_tests: u64,
@@ -162,12 +162,14 @@ pub struct Config {
     pub timeout: Duration,
 }
 
-pub fn run(cfg: &Config) -> ExitCode {
-    let mut tests = Vec::new();
+pub fn run(cfg: &Config, include: &[String], exclude: &[String]) -> ExitCode {
+    let mut tests = register_tests();
 
-    register_tests(&mut tests);
-    tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
-    // TODO: pop tests that don't match the filter
+    if !include.is_empty() {
+        tests.retain(|test| include.iter().any(|inc| test.name.contains(inc)));
+    }
+
+    tests.retain(|test| !exclude.iter().any(|exc| test.name.contains(exc)));
 
     let (logfile, logfile_name) = log_file();
     let mut out = Tee { f: &logfile };
@@ -181,12 +183,15 @@ pub fn run(cfg: &Config) -> ExitCode {
 }
 
 /// Configure tests to run
-fn register_tests(tests: &mut Vec<TestInfo>) {
-    register_float::<f32>(tests);
-    register_float::<f64>(tests);
+pub fn register_tests() -> Vec<TestInfo> {
+    let mut tests = Vec::new();
+    register_float::<f32>(&mut tests);
+    register_float::<f64>(&mut tests);
 
     // Don't run exhaustive for bits > 32, it would take years.
-    register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(tests);
+    register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
+    tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
+    tests
 }
 
 /// Register all generators for a single float
@@ -372,7 +377,7 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let mut failures = 0;
         let mut result = Ok(());
 
-        let update_increment = (est / 100).clamp(1, 10_000);
+        let update_increment = (est / 100).clamp(1, est);
         let started = Instant::now();
 
         for test_str in gen {

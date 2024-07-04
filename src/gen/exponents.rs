@@ -34,7 +34,7 @@ impl<F: Float> Generator<F> for SmallExponents {
             // which almost always (except for exponents near +/- 300) result in an input
             // equivalent to something we already generate in a different way.
             .filter(|(exp, coeff)| coeff % 10 != 0)
-            .flat_map(|(exp, coeff)| [format!("{coeff}e{exp}"), format!("{coeff}e-{exp}")]);
+            .map(|(exp, coeff)| format!("{coeff}e{exp}"));
 
         Self {
             iter: Box::new(iter),
