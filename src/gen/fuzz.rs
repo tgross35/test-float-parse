@@ -37,6 +37,7 @@ pub struct Fuzz<F> {
 impl<F: Float> Generator<F> for Fuzz<F> {
     const NAME: &'static str = "fuzz";
     const SHORT_NAME: &'static str = "fuzz";
+    const PATTERNS_CONTAIN_NAN: bool = true;
 
     fn estimated_tests() -> u64 {
         FUZZ_COUNT

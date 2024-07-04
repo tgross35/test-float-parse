@@ -112,6 +112,8 @@ enum Failure {
     RoundedToInf,
     /// Above the negative infinity cutoff but got rounded to negative infinity
     RoundedToNegInf,
+    UnexpectedNan,
+    ExpectedNan,
 }
 
 impl Failure {
@@ -120,6 +122,8 @@ impl Failure {
             Failure::RoundedToZero => "incorrectly rounded to 0 (expected nonzero)",
             Failure::RoundedToInf => "incorrectly rounded to +inf (expected finite)",
             Failure::RoundedToNegInf => "incorrectly rounded to -inf (expected finite)",
+            Failure::UnexpectedNan => "got a NaN where none was expected",
+            Failure::ExpectedNan => "expected a NaN but did not get it",
         }
     }
 }
@@ -377,19 +381,19 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
         let mut failures = 0;
         let mut result = Ok(());
 
-        let update_increment = (est / 100).clamp(1, est);
+        let checks_per_update = (est / 100000).clamp(1, 1000);
         let started = Instant::now();
 
         for test_str in gen {
             executed += 1;
 
-            match validate::validate::<F>(&test_str) {
+            match validate::validate::<F>(&test_str, G::PATTERNS_CONTAIN_NAN) {
                 Ok(()) => (),
                 Err(e) => tx.send(Msg::new::<F, G>(e)).unwrap(),
             };
 
             // Send periodic updates
-            if executed % update_increment == 0 {
+            if executed % checks_per_update == 0 {
                 let elapsed = Instant::now() - started;
 
                 tx.send(Msg::new::<F, G>(Update::Progress {
@@ -627,6 +631,8 @@ impl_float!(f32, u32, 32; f64, u64, 64);
 trait Generator<F: Float>: Iterator<Item = String> + 'static {
     const NAME: &'static str;
     const SHORT_NAME: &'static str;
+    /// If false (default), validation will assert on NaN.
+    const PATTERNS_CONTAIN_NAN: bool = false;
 
     /// Approximate number of tests that will be run
     fn estimated_tests() -> u64;

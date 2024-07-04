@@ -67,6 +67,7 @@ enum FloatRes<F: Float> {
     Inf,
     NegInf,
     Zero,
+    Nan,
     Real {
         /// The significand as a signed integer
         sig: F::SInt,
@@ -78,9 +79,6 @@ enum FloatRes<F: Float> {
 impl<F: Float> FloatRes<F> {
     fn normalize(self) -> Self {
         match self {
-            Self::Inf => Self::Inf,
-            Self::NegInf => Self::NegInf,
-            Self::Zero => Self::Zero,
             Self::Real { sig, exp } => {
                 if exp < 0 {
                     let norm = min(sig.trailing_zeros(), exp.wrapping_neg().try_into().unwrap());
@@ -92,11 +90,12 @@ impl<F: Float> FloatRes<F> {
                     self
                 }
             }
+            _ => self,
         }
     }
 }
 
-pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
+pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
     let parsed: F = input.parse().unwrap_or_else(|e| {
         panic!(
             "parsing failed for {}: {e}. Input: {input}",
@@ -105,21 +104,32 @@ pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
     });
 
     // Parsed float, decoded into significand and exponent
-    let decoded = decode(parsed);
+    let decoded = decode(parsed, allow_nan);
     // Float parsed separately into a rational
-    let rational = parse_ratioinal(input);
+    let rational = parse_rational(input);
+    let rational_nan = rational.is_none();
+    let get_rational = || {
+        rational.ok_or(Update::Failure {
+            fail: Failure::UnexpectedNan,
+            input: input.into(),
+        })
+    };
 
     let consts = F::constants();
 
     match decoded {
         FloatRes::Zero => check(
-            rational <= consts.zero_cutoff,
+            get_rational()? <= consts.zero_cutoff,
             input,
             Failure::RoundedToZero,
         ),
-        FloatRes::Inf => check(rational >= consts.inf_cutoff, input, Failure::RoundedToInf),
+        FloatRes::Inf => check(
+            get_rational()? >= consts.inf_cutoff,
+            input,
+            Failure::RoundedToInf,
+        ),
         FloatRes::NegInf => check(
-            rational <= consts.neg_inf_cutoff,
+            get_rational()? <= consts.neg_inf_cutoff,
             input,
             Failure::RoundedToNegInf,
         ),
@@ -127,21 +137,23 @@ pub fn validate<F: Float>(input: &str) -> Result<(), Update> {
             let approx = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
             Ok(())
         }
+        FloatRes::Nan => check(rational_nan, input, Failure::ExpectedNan),
     }
 }
 
-fn check(correct: bool, input: &str, failure: Failure) -> Result<(), Update> {
-    if correct {
-        Ok(())
-    } else {
-        Err(Update::Failure {
-            fail: failure,
-            input: input.into(),
-        })
+/// Assert that a condition is true, otherwise construct an `Err`
+fn check(condition: bool, input: &str, failure: Failure) -> Result<(), Update> {
+    if condition {
+        return Ok(());
     }
+
+    Err(Update::Failure {
+        fail: failure,
+        input: input.into(),
+    })
 }
 
-fn decode<F: Float>(f: F) -> FloatRes<F> {
+fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     let ione = F::SInt::ONE;
     let izero = F::SInt::ZERO;
 
@@ -156,7 +168,14 @@ fn decode<F: Float>(f: F) -> FloatRes<F> {
 
         exponent_biased += 1;
     } else if exponent_biased == F::EXP_SAT {
-        assert_eq!(mantissa, izero, "Unexpected NaN for {}", f.to_bits().hex());
+        if !allow_nan {
+            assert_eq!(mantissa, izero, "Unexpected NaN for {}", f.to_bits().hex());
+        } else {
+            if mantissa != izero {
+                return FloatRes::Nan;
+            }
+        }
+
         if f.is_sign_negative() {
             return FloatRes::NegInf;
         } else {
@@ -182,12 +201,16 @@ fn decode<F: Float>(f: F) -> FloatRes<F> {
     }
 }
 
-fn parse_ratioinal(s: &str) -> BigRational {
+/// Turn a string into a rational
+fn parse_rational(s: &str) -> Option<BigRational> {
     let mut s = s; // lifetime rules
+    if s == "NaN" {
+        return None;
+    }
 
     // Fast path; no decimals or exponents ot parse
     if s.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-        return BigRational::from_str(s).unwrap();
+        return Some(BigRational::from_str(s).unwrap());
     }
 
     let mut ten_exp: i32 = 0;
@@ -211,9 +234,10 @@ fn parse_ratioinal(s: &str) -> BigRational {
         s = &s_owned;
     }
 
-    let mut r = BigRational::from_str(s).unwrap();
+    let mut r = BigRational::from_str(s)
+        .unwrap_or_else(|e| panic!("`BigRational::from_str(\"{s}\")` failed with {e}"));
     r *= BigRational::from_u32(10).unwrap().pow(ten_exp);
-    r
+    Some(r)
 }
 
 #[cfg(test)]
@@ -223,35 +247,35 @@ mod tests {
     #[test]
     fn test_parse_rational() {
         assert_eq!(
-            parse_ratioinal("1234"),
+            parse_rational("1234").unwrap(),
             BigRational::new(1234.into(), 1.into())
         );
         assert_eq!(
-            parse_ratioinal("-1234"),
+            parse_rational("-1234").unwrap(),
             BigRational::new((-1234).into(), 1.into())
         );
         assert_eq!(
-            parse_ratioinal("1e+6"),
+            parse_rational("1e+6").unwrap(),
             BigRational::new(1000000.into(), 1.into())
         );
         assert_eq!(
-            parse_ratioinal("1e-6"),
+            parse_rational("1e-6").unwrap(),
             BigRational::new(1.into(), 1000000.into())
         );
         assert_eq!(
-            parse_ratioinal("10.4e6"),
+            parse_rational("10.4e6").unwrap(),
             BigRational::new(10400000.into(), 1.into())
         );
         assert_eq!(
-            parse_ratioinal("10.4e+6"),
+            parse_rational("10.4e+6").unwrap(),
             BigRational::new(10400000.into(), 1.into())
         );
         assert_eq!(
-            parse_ratioinal("10.4e-6"),
+            parse_rational("10.4e-6").unwrap(),
             BigRational::new(13.into(), 1250000.into())
         );
         assert_eq!(
-            parse_ratioinal("10.4243566462342456234124"),
+            parse_rational("10.4243566462342456234124").unwrap(),
             BigRational::new(
                 104243566462342456234124_i128.into(),
                 10000000000000000000000_i128.into()
@@ -261,57 +285,57 @@ mod tests {
 
     #[test]
     fn test_decode() {
-        assert_eq!(decode(0f32), FloatRes::Zero);
-        assert_eq!(decode(f32::INFINITY), FloatRes::Inf);
-        assert_eq!(decode(f32::NEG_INFINITY), FloatRes::NegInf);
+        assert_eq!(decode(0f32, false), FloatRes::Zero);
+        assert_eq!(decode(f32::INFINITY, false), FloatRes::Inf);
+        assert_eq!(decode(f32::NEG_INFINITY, false), FloatRes::NegInf);
         assert_eq!(
-            decode(1.0f32).normalize(),
+            decode(1.0f32, false).normalize(),
             FloatRes::Real { sig: 1, exp: 0 }
         );
         assert_eq!(
-            decode(-1.0f32).normalize(),
+            decode(-1.0f32, false).normalize(),
             FloatRes::Real { sig: -1, exp: 0 }
         );
         assert_eq!(
-            decode(100.0f32).normalize(),
+            decode(100.0f32, false).normalize(),
             FloatRes::Real { sig: 100, exp: 0 }
         );
         assert_eq!(
-            decode(100.5f32).normalize(),
+            decode(100.5f32, false).normalize(),
             FloatRes::Real { sig: 201, exp: -1 }
         );
         assert_eq!(
-            decode(-4.004f32).normalize(),
+            decode(-4.004f32, false).normalize(),
             FloatRes::Real {
                 sig: -8396997,
                 exp: -21
             }
         );
         assert_eq!(
-            decode(0.0004f32).normalize(),
+            decode(0.0004f32, false).normalize(),
             FloatRes::Real {
                 sig: 13743895,
                 exp: -35
             }
         );
         assert_eq!(
-            decode(f32::from_bits(0x1)).normalize(),
+            decode(f32::from_bits(0x1), false).normalize(),
             FloatRes::Real { sig: 1, exp: -149 }
         );
     }
 
     #[test]
     fn test_validate() {
-        validate::<f32>("0").unwrap();
-        validate::<f32>("-0").unwrap();
-        validate::<f32>("1").unwrap();
-        validate::<f32>("-1").unwrap();
-        validate::<f32>("1.1").unwrap();
-        validate::<f32>("-1.1").unwrap();
-        validate::<f32>("1e10").unwrap();
-        validate::<f32>("1e1000").unwrap();
-        validate::<f32>("-1e1000").unwrap();
-        validate::<f32>("1e-1000").unwrap();
-        validate::<f32>("-1e-1000").unwrap();
+        validate::<f32>("0", false).unwrap();
+        validate::<f32>("-0", false).unwrap();
+        validate::<f32>("1", false).unwrap();
+        validate::<f32>("-1", false).unwrap();
+        validate::<f32>("1.1", false).unwrap();
+        validate::<f32>("-1.1", false).unwrap();
+        validate::<f32>("1e10", false).unwrap();
+        validate::<f32>("1e1000", false).unwrap();
+        validate::<f32>("-1e1000", false).unwrap();
+        validate::<f32>("1e-1000", false).unwrap();
+        validate::<f32>("-1e-1000", false).unwrap();
     }
 }
