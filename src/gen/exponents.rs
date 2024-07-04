@@ -12,14 +12,14 @@ const LARGE_COEFF_MAX: u32 = 100_000;
 const LARGE_EXP_RANGE: Range<u32> = 300..350;
 
 pub struct SmallExponents {
-    iter: Box<dyn Iterator<Item = String>>,
+    iter: Box<dyn Iterator<Item = String> + Send>,
 }
 
 impl<F: Float> Generator<F> for SmallExponents {
     const NAME: &'static str = "small exponents";
     const SHORT_NAME: &'static str = "small exp";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         ((SMALL_COEFF_RANGE.end() - SMALL_COEFF_RANGE.start())
             * (SMALL_EXP_RANGE.end() - SMALL_EXP_RANGE.start())
             * 2)
@@ -51,14 +51,14 @@ impl Iterator for SmallExponents {
 }
 
 pub struct LargeExponents {
-    iter: Box<dyn Iterator<Item = String>>,
+    iter: Box<dyn Iterator<Item = String> + Send>,
 }
 
 impl<F: Float> Generator<F> for LargeExponents {
     const NAME: &'static str = "large positive exponents";
     const SHORT_NAME: &'static str = "large +exp";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         ((LARGE_COEFF_MAX - 1) * (LARGE_EXP_RANGE.end + 1 - LARGE_EXP_RANGE.start) * 2).into()
     }
 
@@ -82,7 +82,7 @@ impl Iterator for LargeExponents {
 }
 
 pub struct LargeNegExponents {
-    iter: Box<dyn Iterator<Item = String>>,
+    iter: Box<dyn Iterator<Item = String> + Send>,
     /// Even though the iterator allocates, we still need the internal buffer
     /// to meet the function signature.
     buf: String,
@@ -92,7 +92,7 @@ impl<F: Float> Generator<F> for LargeNegExponents {
     const NAME: &'static str = "large negative exponents";
     const SHORT_NAME: &'static str = "large -exp";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         ((LARGE_COEFF_MAX - 1) * (LARGE_EXP_RANGE.end + 1 - LARGE_EXP_RANGE.start) * 2).into()
     }
 

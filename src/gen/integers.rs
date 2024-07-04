@@ -28,7 +28,7 @@ impl<F: Float> Generator<F> for SmallInt {
     const NAME: &'static str = "small integer values";
     const SHORT_NAME: &'static str = "int small";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         (SMALL_VALUES.end() + 1 - SMALL_VALUES.start())
             .try_into()
             .unwrap()
@@ -50,7 +50,7 @@ impl Iterator for SmallInt {
 
 /// Test much bigger integers
 pub struct LargeInt {
-    iter: Box<dyn Iterator<Item = i128>>,
+    iter: Box<dyn Iterator<Item = i128> + Send>,
     buf: String,
 }
 
@@ -70,7 +70,7 @@ impl<F: Float> Generator<F> for LargeInt {
     const NAME: &'static str = "large integer values";
     const SHORT_NAME: &'static str = "int large";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         u64::try_from(
             (i128::from(LARGE_POWERS.end - LARGE_POWERS.start)
                 + i128::try_from(Self::EDGE_CASES.len()).unwrap())

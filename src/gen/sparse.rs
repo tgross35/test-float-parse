@@ -24,7 +24,7 @@ macro_rules! pow_iter {
 
 /// Test all numbers that include three 1s in the binary representation
 pub struct FewOnes<F: Float> {
-    iter: Box<dyn Iterator<Item = F::Int>>,
+    iter: Box<dyn Iterator<Item = F::Int> + Send>,
 }
 
 impl<F: Float> Generator<F> for FewOnes<F>
@@ -34,7 +34,7 @@ where
     const NAME: &'static str = "few ones";
     const SHORT_NAME: &'static str = "few ones";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         u64::from(F::BITS).pow(3)
     }
 

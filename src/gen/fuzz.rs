@@ -39,7 +39,7 @@ impl<F: Float> Generator<F> for Fuzz<F> {
     const SHORT_NAME: &'static str = "fuzz";
     const PATTERNS_CONTAIN_NAN: bool = true;
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         FUZZ_COUNT
     }
 

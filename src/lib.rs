@@ -1,19 +1,20 @@
 #![allow(unused)]
 
+mod traits;
 mod validate;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use num::bigint::ToBigInt;
-use num::Integer;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use std::any::{type_name, TypeId};
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::ops::ControlFlow;
 use std::process::ExitCode;
-use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, fs, io, mem, ops, sync::mpsc, thread, time};
 use time::{Duration, Instant};
-use validate::FloatConstants;
+
+use traits::{Float, Generator, Int};
 
 mod gen {
     pub mod exhaustive;
@@ -26,6 +27,10 @@ mod gen {
 }
 
 pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
+
+/// If there are more tests than this threashold, we launch them last and use parallel
+/// iterators.
+const HUGE_TEST_CUTOFF: u64 = 1_000_000;
 
 /// Message passed from a test runner to the host
 #[derive(Clone, Debug)]
@@ -137,7 +142,7 @@ pub struct TestInfo {
     pub name: String,
     short_name: String,
     run: bool,
-    estimated_tests: u64,
+    total_tests: u64,
     launch: for<'s> fn(&'s thread::Scope<'s, '_>, mpsc::Sender<Msg>, &TestInfo),
     pb: Option<ProgressBar>,
     completed: Option<Completed>,
@@ -149,6 +154,11 @@ impl TestInfo {
         pb.set_message(format!("{} ({} failures)", self.short_name, c.failures));
 
         pb.finish();
+    }
+
+    /// True if this should be run using parallel iterators.
+    fn is_huge_test(&self) -> bool {
+        self.total_tests >= HUGE_TEST_CUTOFF
     }
 }
 
@@ -166,6 +176,7 @@ pub struct Config {
     pub timeout: Duration,
 }
 
+/// Collect, filter, and launch all tests
 pub fn run(cfg: &Config, include: &[String], exclude: &[String]) -> ExitCode {
     let mut tests = register_tests();
 
@@ -195,6 +206,7 @@ pub fn register_tests() -> Vec<TestInfo> {
     // Don't run exhaustive for bits > 32, it would take years.
     register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
     tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
+
     tests
 }
 
@@ -229,7 +241,7 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
         short_name: format!("{f_name} {gen_short_name}"),
         run: true,
         launch: launch_one::<F, G>,
-        estimated_tests: G::estimated_tests(),
+        total_tests: G::total_tests(),
         pb: None,
         completed: None,
     };
@@ -241,18 +253,20 @@ enum EndCondition {
     Success(Duration),
 }
 
-/// Run all tests
-///
-/// Take `tests` by value so we can mutate it within the thread scope
+/// Run all tests in `tests`
 fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Duration {
     let (tx, rx) = mpsc::channel::<Msg>();
     let total_tests = tests.len();
     let mp = MultiProgress::new();
+    mp.set_move_cursor(true);
     let pb_style = ProgressStyle::with_template(
         "[{elapsed}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}",
     )
     .unwrap()
     .progress_chars("##-");
+
+    // Run shorter tests first
+    tests.sort_unstable_by_key(|test| test.total_tests);
 
     for test in tests.iter() {
         out.write_sout(format!("Launching test '{}'", test.name));
@@ -263,14 +277,15 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
     let mut panic_drop_bars = Vec::new();
 
     for test in tests.iter_mut() {
-        let mut pb = mp.add(ProgressBar::new(test.estimated_tests));
+        let mut pb = mp.add(ProgressBar::new(test.total_tests));
         pb.set_style(pb_style.clone());
         pb.set_message(test.short_name.clone());
         panic_drop_bars.push(pb.clone());
         test.pb = Some(pb);
     }
 
-    // indicatif likes to eat panic messages <https://github.com/console-rs/indicatif/issues/121>
+    // indicatif likes to eat panic messages. This workaround isn't ideal, but it improves things.
+    // <https://github.com/console-rs/indicatif/issues/121>
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         for bar in &panic_drop_bars {
@@ -367,6 +382,7 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
     }
 }
 
+/// Test runer for a single generator
 fn launch_one<'s, F: Float, G: Generator<F>>(
     scope: &'s thread::Scope<'s, '_>,
     tx: mpsc::Sender<Msg>,
@@ -375,17 +391,17 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
     scope.spawn(move || {
         tx.send(Msg::new::<F, G>(Update::Started));
 
-        let mut est = G::estimated_tests();
+        let mut est = G::total_tests();
         let mut gen = G::new();
-        let mut executed = 0;
+        let mut executed = AtomicU64::new(0);
         let mut failures = 0;
         let mut result = Ok(());
 
         let checks_per_update = (est / 100000).clamp(1, 1000);
         let started = Instant::now();
 
-        for test_str in gen {
-            executed += 1;
+        let check_one = |test_str: String| {
+            let executed = executed.fetch_add(1, Ordering::Relaxed);
 
             match validate::validate::<F>(&test_str, G::PATTERNS_CONTAIN_NAN) {
                 Ok(()) => (),
@@ -398,15 +414,18 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
 
                 tx.send(Msg::new::<F, G>(Update::Progress {
                     executed,
-                    duration_each_us: (elapsed.as_micros() / u128::from(executed))
+                    duration_each_us: (elapsed.as_micros() / u128::from(executed).max(1))
                         .try_into()
                         .unwrap(),
                 }))
                 .unwrap();
             }
-        }
+        };
+
+        gen.par_bridge().for_each(check_one);
 
         let elapsed = Instant::now() - started;
+        let executed = executed.into_inner();
 
         // Warn about bad estimates
         if executed != est {
@@ -461,194 +480,6 @@ impl<'a> Tee<'a> {
         s.push('\n');
         self.f.write(s.as_bytes()).unwrap();
         io::stdout().write(s.as_bytes()).unwrap();
-    }
-}
-
-trait Int:
-    Copy
-    + fmt::Debug
-    + fmt::Display
-    + fmt::LowerHex
-    + ops::Add<Output = Self>
-    + ops::Sub<Output = Self>
-    + ops::Shl<u32, Output = Self>
-    + ops::Shr<u32, Output = Self>
-    + ops::BitAnd<Output = Self>
-    + ops::BitOr<Output = Self>
-    + ops::Not<Output = Self>
-    + ops::AddAssign
-    + ops::BitAndAssign
-    + ops::BitOrAssign
-    + From<u8>
-    + TryFrom<i8>
-    + TryFrom<u32, Error: fmt::Debug>
-    + TryFrom<u64, Error: fmt::Debug>
-    + TryFrom<u128, Error: fmt::Debug>
-    + TryInto<u64, Error: fmt::Debug>
-    + TryInto<u32, Error: fmt::Debug>
-    + ToBigInt
-    + PartialOrd
-    + Integer
-    + 'static
-{
-    type Signed: Int;
-    type Bytes: Default + AsMut<[u8]>;
-
-    const BITS: u32;
-    const ZERO: Self;
-    const ONE: Self;
-    const MAX: Self;
-
-    fn to_signed(self) -> Self::Signed;
-    fn wrapping_neg(self) -> Self;
-    fn trailing_zeros(self) -> u32;
-    fn from_le_bytes(bytes: Self::Bytes) -> Self;
-
-    fn hex(self) -> String {
-        format!("{:x}", self)
-    }
-}
-
-macro_rules! impl_int {
-    ($($uty:ty, $sty:ty);+) => {
-        $(
-            impl Int for $uty {
-                type Signed = $sty;
-                type Bytes = [u8; Self::BITS as usize / 8];
-                const BITS: u32 = Self::BITS;
-                const ZERO: Self = 0;
-                const ONE: Self = 1;
-                const MAX: Self = Self::MAX;
-                fn to_signed(self) -> Self::Signed {
-                    self.try_into().unwrap()
-                }
-                fn wrapping_neg(self) -> Self {
-                    self.wrapping_neg()
-                }
-                fn trailing_zeros(self) -> u32 {
-                    self.trailing_zeros()
-                }
-                fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                    Self::from_be_bytes(bytes)
-                }
-            }
-
-            impl Int for $sty {
-                type Signed = Self;
-                type Bytes = [u8; Self::BITS as usize / 8];
-                const BITS: u32 = Self::BITS;
-                const ZERO: Self = 0;
-                const ONE: Self = 1;
-                const MAX: Self = Self::MAX;
-                fn to_signed(self) -> Self::Signed {
-                    self
-                }
-                fn wrapping_neg(self) -> Self {
-                    self.wrapping_neg()
-                }
-                fn trailing_zeros(self) -> u32 {
-                    self.trailing_zeros()
-                }
-                fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                    Self::from_be_bytes(bytes)
-                }
-            }
-        )+
-    }
-}
-
-impl_int!(u32, i32; u64, i64);
-
-trait Float:
-    Copy + fmt::Debug + fmt::LowerExp + FromStr<Err: fmt::Display> + FloatConstants + Sized + 'static
-{
-    /// Unsigned integer of same width
-    type Int: Int<Signed = Self::SInt>;
-    type SInt: Int;
-
-    /// Total bits
-    const BITS: u32;
-
-    /// (Stored) bits in the mantissa)
-    const MAN_BITS: u32;
-
-    /// Bits in the exponent
-    const EXP_BITS: u32 = Self::BITS - Self::MAN_BITS - 1;
-
-    /// A saturated exponent (all ones)
-    const EXP_SAT: u32 = (1 << Self::EXP_BITS) - 1;
-
-    /// The exponent bias, also its maximum value
-    const EXP_BIAS: u32 = Self::EXP_SAT >> 1;
-
-    const MAN_MASK: Self::Int;
-    const SIGN_MASK: Self::Int;
-
-    fn from_bits(i: Self::Int) -> Self;
-    fn to_bits(self) -> Self::Int;
-
-    fn is_sign_negative(self) -> bool {
-        (self.to_bits() & Self::SIGN_MASK) > Self::Int::ZERO
-    }
-
-    /// Exponent without adjustment
-    fn exponent(self) -> u32 {
-        ((self.to_bits() >> Self::MAN_BITS) & Self::EXP_SAT.try_into().unwrap())
-            .try_into()
-            .unwrap()
-    }
-
-    /// Adjusted for the bias
-    fn exponent_adj(self) -> i32 {
-        self.exponent() as i32 - Self::EXP_BIAS as i32
-    }
-
-    fn mantissa(self) -> Self::Int {
-        self.to_bits() & Self::MAN_MASK
-    }
-}
-
-macro_rules! impl_float {
-    ($($ty:ty, $ity:ty, $bits:literal);+) => {
-        $(
-            impl Float for $ty {
-                type Int = $ity;
-                type SInt = <Self::Int as Int>::Signed;
-                const BITS: u32 = $bits;
-                const MAN_BITS: u32 = Self::MANTISSA_DIGITS - 1;
-                const MAN_MASK: Self::Int = (Self::Int::ONE << Self::MAN_BITS) - Self::Int::ONE;
-                const SIGN_MASK: Self::Int = Self::Int::ONE << (Self::BITS-1);
-                fn from_bits(i: Self::Int) -> Self { Self::from_bits(i) }
-                fn to_bits(self) -> Self::Int { self.to_bits() }
-            }
-        )+
-    }
-}
-
-impl_float!(f32, u32, 32; f64, u64, 64);
-
-/// Implement this on
-trait Generator<F: Float>: Iterator<Item = String> + 'static {
-    const NAME: &'static str;
-    const SHORT_NAME: &'static str;
-    /// If false (default), validation will assert on NaN.
-    const PATTERNS_CONTAIN_NAN: bool = false;
-
-    /// Approximate number of tests that will be run
-    fn estimated_tests() -> u64;
-
-    /// Create this generator
-    fn new() -> Self;
-
-    // /// Return the next number in this generator to be tested
-    // fn next<'a>(&'a mut self) -> Option<&'a str>;
-}
-
-const fn const_min(a: u32, b: u32) -> u32 {
-    if a <= b {
-        a
-    } else {
-        b
     }
 }
 

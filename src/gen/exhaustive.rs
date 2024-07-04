@@ -14,7 +14,7 @@ where
     const NAME: &'static str = "exhaustive";
     const SHORT_NAME: &'static str = "exhaustive";
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         F::Int::MAX.try_into().unwrap()
     }
 

@@ -45,7 +45,7 @@ impl<F: Float> Generator<F> for SubnormEdge<F> {
         }
     }
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         Self::edge_cases().len().try_into().unwrap()
     }
 }
@@ -86,7 +86,7 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
         Self { num: F::Int::ZERO }
     }
 
-    fn estimated_tests() -> u64 {
+    fn total_tests() -> u64 {
         min(Self::linspace_max(), F::MAN_MASK).try_into().unwrap()
     }
 }
