@@ -533,7 +533,7 @@ fn test_runner<'s, F: Float, G: Generator<F>>(
     // We use a map so we have a way to exit early, `for_each(drop)` ensures it is consumed.
     let res = gen
         .par_bridge()
-        .try_for_each_init(|| String::with_capacity(40), check_one);
+        .try_for_each_init(|| String::with_capacity(100), check_one);
 
     let elapsed = Instant::now() - started;
     let executed = executed.into_inner();

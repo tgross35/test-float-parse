@@ -20,5 +20,6 @@ name = "test_float_parse"
 
 [profile.release]
 codegen-units = 1
+debug = true
 # lto = true
 
