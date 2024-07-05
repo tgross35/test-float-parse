@@ -18,7 +18,9 @@ pub struct Constants {
     neg_inf_cutoff: BigRational,
     /// The powers of two for all relevant integers
     powers_of_two: BTreeMap<i32, BigRational>,
-    /// Half of each power of two
+    /// Half of each power of two. ULP = "unit in last position", so these are one bit
+    /// more precise than what is representable by the float (i.e. in between representable
+    /// values).
     half_ulp: BTreeMap<i32, BigRational>,
     /// Handy to have around so we don't need to allocate for it
     two: BigInt,
@@ -40,9 +42,7 @@ impl Constants {
         let max = (two - two.pow(-F::MAN_BITS.to_signed())) * (two.pow(F::EXP_BIAS.to_signed()));
         let zero_cutoff = &min_subnormal / two_int;
 
-        //
-        let max_ulp = F::EXP_BIAS - F::MAN_BITS;
-        let inf_cutoff = &max + two_int.pow(max_ulp - 1);
+        let inf_cutoff = &max + two_int.pow(F::EXP_BIAS - F::MAN_BITS - 1);
         let neg_inf_cutoff = -&inf_cutoff;
 
         let powers_of_two: BTreeMap<i32, _> = (-1100_i32..1100).map(|n| (n, two.pow(n))).collect();
@@ -149,9 +149,7 @@ impl<F: Float> FloatRes<F> {
     fn validate_real(rational: BigRational, sig: F::SInt, exp: i32) -> Result<(), CheckFailure> {
         let consts = F::constants();
         // Rational from the parsed value (`sig` and `exp`)
-        let parsed_rational =
-            dbg!(consts.powers_of_two.get(&exp).unwrap()) * sig.to_bigint().unwrap();
-        dbg!(&rational, &parsed_rational);
+        let parsed_rational = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
         let error = (parsed_rational - rational).abs();
 
         // Determine acceptable error at this exponent
@@ -163,7 +161,6 @@ impl<F: Float> FloatRes<F> {
 
         let one_ulp = consts.half_ulp.get(&(exp + 1)).unwrap();
         assert_eq!(one_ulp, &(half_ulp * &consts.two));
-        dbg!(&error, &half_ulp, &one_ulp);
 
         let relative_error = error / one_ulp;
 
