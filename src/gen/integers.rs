@@ -1,5 +1,7 @@
+use std::fmt::Write;
 use std::ops::{Range, RangeInclusive};
 
+use crate::traits::BoxGenIter;
 use crate::{Float, Generator};
 
 const SMALL_MAX_POW2: u32 = 19;
@@ -25,6 +27,8 @@ impl<F: Float> Generator<F> for SmallInt {
     const NAME: &'static str = "small integer values";
     const SHORT_NAME: &'static str = "int small";
 
+    type WriteCtx = i32;
+
     fn total_tests() -> u64 {
         (SMALL_VALUES.end() + 1 - SMALL_VALUES.start())
             .try_into()
@@ -34,24 +38,26 @@ impl<F: Float> Generator<F> for SmallInt {
     fn new() -> Self {
         Self { iter: SMALL_VALUES }
     }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx}").unwrap();
+    }
 }
 
 impl Iterator for SmallInt {
-    type Item = String;
+    type Item = i32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let num = self.iter.next()?;
-        Some(format!("{num}"))
+        self.iter.next()
     }
 }
 
 /// Test much bigger integers
-pub struct LargeInt {
-    iter: Box<dyn Iterator<Item = i128> + Send>,
-    buf: String,
+pub struct LargeInt<F: Float> {
+    iter: BoxGenIter<Self, F>,
 }
 
-impl LargeInt {
+impl<F: Float> LargeInt<F> {
     const EDGE_CASES: [i128; 7] = [
         i32::MIN as i128,
         i32::MAX as i128,
@@ -63,9 +69,11 @@ impl LargeInt {
     ];
 }
 
-impl<F: Float> Generator<F> for LargeInt {
+impl<F: Float> Generator<F> for LargeInt<F> {
     const NAME: &'static str = "large integer values";
     const SHORT_NAME: &'static str = "int large";
+
+    type WriteCtx = i128;
 
     fn total_tests() -> u64 {
         u64::try_from(
@@ -74,7 +82,6 @@ impl<F: Float> Generator<F> for LargeInt {
                 * (LARGE_PERTURBATIONS.end() + 1 - LARGE_PERTURBATIONS.start()),
         )
         .unwrap()
-        // + Self::EDGE_CASES.len() as u64
     }
 
     fn new() -> Self {
@@ -85,16 +92,17 @@ impl<F: Float> Generator<F> for LargeInt {
 
         Self {
             iter: Box::new(iter),
-            buf: String::new(),
         }
     }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx}").unwrap();
+    }
 }
-impl Iterator for LargeInt {
-    type Item = String;
+impl<F: Float> Iterator for LargeInt<F> {
+    type Item = i128;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let num = self.iter.next()?;
-        self.buf.clear();
-        Some(format!("{num}"))
+        self.iter.next()
     }
 }

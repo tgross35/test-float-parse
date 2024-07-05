@@ -1,11 +1,10 @@
-// #![allow(unused)]
-
 mod traits;
 mod validate;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::any::{type_name, TypeId};
+use std::cmp::min;
 use std::fmt;
 use std::io::prelude::*;
 use std::process::ExitCode;
@@ -318,11 +317,12 @@ where
 {
     register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(tests);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(tests);
-    register_generator_for_float::<F, gen::exponents::SmallExponents>(tests);
-    register_generator_for_float::<F, gen::exponents::LargeExponents>(tests);
+    register_generator_for_float::<F, gen::exponents::SmallExponents<F>>(tests);
+    register_generator_for_float::<F, gen::exponents::LargeExponents<F>>(tests);
+    register_generator_for_float::<F, gen::exponents::LargeNegExponents<F>>(tests);
     register_generator_for_float::<F, gen::sparse::FewOnes<F>>(tests);
     register_generator_for_float::<F, gen::integers::SmallInt>(tests);
-    register_generator_for_float::<F, gen::integers::LargeInt>(tests);
+    register_generator_for_float::<F, gen::integers::LargeInt<F>>(tests);
     register_generator_for_float::<F, gen::long_fractions::RepeatingDecimal>(tests);
     register_generator_for_float::<F, gen::fuzz::Fuzz<F>>(tests);
 }
@@ -340,7 +340,7 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
         pb: None,
         name: format!("{f_name} {gen_name}"),
         short_name: format!("{f_name} {gen_short_name}"),
-        launch: launch_one::<F, G>,
+        launch: test_runner::<F, G>,
         total_tests: G::total_tests(),
         completed: OnceLock::new(),
     };
@@ -482,7 +482,7 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, cfg: &Config, out: &mut T
 }
 
 /// Test runer for a single generator
-fn launch_one<'s, F: Float, G: Generator<F>>(
+fn test_runner<'s, F: Float, G: Generator<F>>(
     tx: mpsc::Sender<Msg>,
     _info: &TestInfo,
     cfg: &Config,
@@ -494,13 +494,15 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
     let executed = AtomicU64::new(0);
     let failures = AtomicU64::new(0);
 
-    let checks_per_update = (est / 100000).clamp(1, 1000);
+    let checks_per_update = min(est, 1000);
     let started = Instant::now();
 
-    let check_one = |test_str: String| {
+    let check_one = |buf: &mut String, ctx: G::WriteCtx| {
         let executed = executed.fetch_add(1, Ordering::Relaxed);
+        buf.clear();
+        G::write_string(buf, ctx);
 
-        match validate::validate::<F>(&test_str, G::PATTERNS_CONTAIN_NAN) {
+        match validate::validate::<F>(&buf, G::PATTERNS_CONTAIN_NAN) {
             Ok(()) => (),
             Err(e) => {
                 tx.send(Msg::new::<F, G>(e)).unwrap();
@@ -529,7 +531,9 @@ fn launch_one<'s, F: Float, G: Generator<F>>(
     };
 
     // We use a map so we have a way to exit early, `for_each(drop)` ensures it is consumed.
-    let res = gen.par_bridge().try_for_each(check_one);
+    let res = gen
+        .par_bridge()
+        .try_for_each_init(|| String::with_capacity(40), check_one);
 
     let elapsed = Instant::now() - started;
     let executed = executed.into_inner();

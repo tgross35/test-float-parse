@@ -1,4 +1,5 @@
-use crate::{Float, Generator};
+use crate::{traits::BoxGenIter, Float, Generator};
+use std::fmt::Write;
 
 const POWERS_OF_TWO: [u128; 128] = make_powers_of_two();
 
@@ -21,8 +22,13 @@ macro_rules! pow_iter {
 }
 
 /// Test all numbers that include three 1s in the binary representation
-pub struct FewOnes<F: Float> {
-    iter: Box<dyn Iterator<Item = F::Int> + Send>,
+pub struct FewOnes<F: Float>
+// where
+//     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+where
+    FewOnes<F>: Generator<F>,
+{
+    iter: BoxGenIter<Self, F>,
 }
 
 impl<F: Float> Generator<F> for FewOnes<F>
@@ -31,6 +37,8 @@ where
 {
     const NAME: &'static str = "few ones";
     const SHORT_NAME: &'static str = "few ones";
+
+    type WriteCtx = F::Int;
 
     fn total_tests() -> u64 {
         u64::from(F::BITS).pow(3)
@@ -46,13 +54,16 @@ where
             iter: Box::new(iter),
         }
     }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx}").unwrap();
+    }
 }
 
 impl<F: Float> Iterator for FewOnes<F> {
-    type Item = String;
+    type Item = F::Int;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let num = self.iter.next()?;
-        Some(format!("{num}"))
+        self.iter.next()
     }
 }

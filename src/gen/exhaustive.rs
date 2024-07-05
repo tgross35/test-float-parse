@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::ops::RangeInclusive;
 
 use crate::{Float, Generator, Int};
@@ -14,6 +15,8 @@ where
     const NAME: &'static str = "exhaustive";
     const SHORT_NAME: &'static str = "exhaustive";
 
+    type WriteCtx = F;
+
     fn total_tests() -> u64 {
         F::Int::MAX.try_into().unwrap()
     }
@@ -23,17 +26,19 @@ where
             iter: F::Int::ZERO..=F::Int::MAX,
         }
     }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx:e}").unwrap();
+    }
 }
 
 impl<F: Float> Iterator for Exhaustive<F>
 where
     RangeInclusive<F::Int>: Iterator<Item = F::Int>,
 {
-    type Item = String;
+    type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let i = self.iter.next()?;
-
-        Some(format!("{:e}", F::from_bits(i)))
+        Some(F::from_bits(self.iter.next()?))
     }
 }

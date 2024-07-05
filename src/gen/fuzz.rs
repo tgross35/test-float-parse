@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write,
     marker::PhantomData,
     ops::Range,
     sync::atomic::{AtomicU64, Ordering},
@@ -24,6 +25,8 @@ impl<F: Float> Generator<F> for Fuzz<F> {
     const SHORT_NAME: &'static str = "fuzz";
     const PATTERNS_CONTAIN_NAN: bool = true;
 
+    type WriteCtx = F;
+
     fn total_tests() -> u64 {
         FUZZ_COUNT.load(Ordering::Relaxed)
     }
@@ -37,10 +40,14 @@ impl<F: Float> Generator<F> for Fuzz<F> {
             marker: PhantomData,
         }
     }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx:e}").unwrap();
+    }
 }
 
 impl<F: Float> Iterator for Fuzz<F> {
-    type Item = String;
+    type Item = <Self as Generator<F>>::WriteCtx;
 
     fn next(&mut self) -> Option<Self::Item> {
         let _ = self.iter.next()?;
@@ -49,6 +56,6 @@ impl<F: Float> Iterator for Fuzz<F> {
         self.rng.fill_bytes(buf.as_mut());
         let i = F::Int::from_le_bytes(buf);
 
-        Some(format!("{:e}", F::from_bits(i)))
+        Some(F::from_bits(i))
     }
 }

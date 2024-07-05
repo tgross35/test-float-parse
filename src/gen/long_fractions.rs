@@ -16,6 +16,8 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
     const NAME: &'static str = "repeating decimal";
     const SHORT_NAME: &'static str = "dec rep";
 
+    type WriteCtx = String;
+
     fn total_tests() -> u64 {
         u64::try_from((MAX_DIGIT + 1) * u32::try_from(MAX_LEN + 1 - PREFIX.len()).unwrap()).unwrap()
             + 1
@@ -26,6 +28,10 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
             digit: 0,
             buf: PREFIX.to_owned(),
         }
+    }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        *s = ctx;
     }
 }
 

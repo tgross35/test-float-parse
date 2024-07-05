@@ -188,17 +188,27 @@ impl FloatConstants for f64 {
     }
 }
 
+/// Shorthand for synamic iterators that return the `WriteCtx` type.
+pub type BoxGenIter<T, F> = Box<dyn Iterator<Item = <T as Generator<F>>::WriteCtx> + Send>;
+
 /// A test generator. Should provide an iterator that produces strings with unique patterns
 /// to parse.
-pub trait Generator<F: Float>: Iterator<Item = String> + Send + 'static {
+pub trait Generator<F: Float>: Iterator<Item = Self::WriteCtx> + Send + 'static {
     const NAME: &'static str;
     const SHORT_NAME: &'static str;
     /// If false (default), validation will assert on NaN.
     const PATTERNS_CONTAIN_NAN: bool = false;
+
+    /// The context needed to create a test string
+    type WriteCtx: Send;
 
     /// Approximate number of tests that will be run
     fn total_tests() -> u64;
 
     /// Create this generator
     fn new() -> Self;
+
+    /// Write a test to the given string. This is done so that we can reuse string allocations
+    /// (an otherwise relatively expensive part of the tests).
+    fn write_string(s: &mut String, ctx: Self::WriteCtx);
 }
