@@ -35,7 +35,7 @@ const HUGE_TEST_CUTOFF: u64 = 5_000_000;
 const PB_TEMPLATE:&str =
         "[{elapsed:3} {percent:3}%] {bar:20.cyan/blue} NAME ({pos}/{len}, {msg} f, {per_sec}, eta {eta})";
 const PB_TEMPLATE_FINAL: &str =
-    "[{elapsed:3} {percent:3}%] NAME ({pos}/{len}, {msg:.COLOR}, {per_sec}, eta {eta})";
+    "[{elapsed:3} {percent:3}%] NAME ({pos}/{len}, {msg:.COLOR}, {per_sec}, {elapsed_precise})";
 
 /// Global configuration
 #[derive(Debug)]
