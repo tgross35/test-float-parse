@@ -42,7 +42,7 @@ impl Iterator for RepeatingDecimal {
         if inc_digit {
             // Reset the string
             self.buf.clear();
-            self.buf.write_str(PREFIX);
+            self.buf.write_str(PREFIX).unwrap();
         }
 
         self.buf.push(char::from_digit(self.digit, 10).unwrap());

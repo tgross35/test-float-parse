@@ -1,6 +1,4 @@
-use std::{fmt::Write, sync::Arc};
-
-use crate::{Float, Generator, Int};
+use crate::{Float, Generator};
 
 const POWERS_OF_TWO: [u128; 128] = make_powers_of_two();
 

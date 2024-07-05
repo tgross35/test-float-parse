@@ -33,7 +33,7 @@ impl<F: Float> Generator<F> for SmallExponents {
             // If it ends in zeros, the parser will strip those (and adjust the exponent),
             // which almost always (except for exponents near +/- 300) result in an input
             // equivalent to something we already generate in a different way.
-            .filter(|(exp, coeff)| coeff % 10 != 0)
+            .filter(|(_exp, coeff)| coeff % 10 != 0)
             .map(|(exp, coeff)| format!("{coeff}e{exp}"));
 
         Self {
@@ -83,9 +83,6 @@ impl Iterator for LargeExponents {
 
 pub struct LargeNegExponents {
     iter: Box<dyn Iterator<Item = String> + Send>,
-    /// Even though the iterator allocates, we still need the internal buffer
-    /// to meet the function signature.
-    buf: String,
 }
 
 impl<F: Float> Generator<F> for LargeNegExponents {
@@ -103,7 +100,6 @@ impl<F: Float> Generator<F> for LargeNegExponents {
 
         Self {
             iter: Box::new(iter),
-            buf: String::new(),
         }
     }
 }

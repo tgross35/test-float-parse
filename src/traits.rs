@@ -4,6 +4,7 @@ use num::Integer;
 use std::str::FromStr;
 use std::{fmt, ops};
 
+#[allow(dead_code)]
 pub trait Int:
     Copy
     + fmt::Debug
@@ -144,11 +145,6 @@ pub trait Float:
         ((self.to_bits() >> Self::MAN_BITS) & Self::EXP_SAT.try_into().unwrap())
             .try_into()
             .unwrap()
-    }
-
-    /// Adjusted for the bias
-    fn exponent_adj(self) -> i32 {
-        self.exponent() as i32 - Self::EXP_BIAS as i32
     }
 
     fn mantissa(self) -> Self::Int {

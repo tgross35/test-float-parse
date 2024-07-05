@@ -1,9 +1,10 @@
 use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive};
 
-use crate::{Failure, Float, Int, Update};
+use crate::{CheckFailure, Float, Int, Update};
 // use bigdecimal::BigDecimal;
-use std::{any::type_name, cmp::min, collections::BTreeMap, str::FromStr, sync::LazyLock};
+use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Constants {
     min_subnormal: BigRational,
@@ -76,8 +77,11 @@ enum FloatRes<F: Float> {
     },
 }
 
+#[cfg(test)]
 impl<F: Float> FloatRes<F> {
     fn normalize(self) -> Self {
+        use std::cmp::min;
+
         match self {
             Self::Real { sig, exp } => {
                 if exp < 0 {
@@ -110,7 +114,7 @@ pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
     let rational_nan = rational.is_none();
     let get_rational = || {
         rational.ok_or(Update::Failure {
-            fail: Failure::UnexpectedNan,
+            fail: CheckFailure::UnexpectedNan,
             input: input.into(),
         })
     };
@@ -121,28 +125,29 @@ pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
         FloatRes::Zero => check(
             get_rational()? <= consts.zero_cutoff,
             input,
-            Failure::RoundedToZero,
+            CheckFailure::RoundedToZero,
         ),
         FloatRes::Inf => check(
             get_rational()? >= consts.inf_cutoff,
             input,
-            Failure::RoundedToInf,
+            CheckFailure::RoundedToInf,
         ),
         FloatRes::NegInf => check(
             get_rational()? <= consts.neg_inf_cutoff,
             input,
-            Failure::RoundedToNegInf,
+            CheckFailure::RoundedToNegInf,
         ),
         FloatRes::Real { sig, exp } => {
+            // TODO
             let approx = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
             Ok(())
         }
-        FloatRes::Nan => check(rational_nan, input, Failure::ExpectedNan),
+        FloatRes::Nan => check(rational_nan, input, CheckFailure::ExpectedNan),
     }
 }
 
 /// Assert that a condition is true, otherwise construct an `Err`
-fn check(condition: bool, input: &str, failure: Failure) -> Result<(), Update> {
+fn check(condition: bool, input: &str, failure: CheckFailure) -> Result<(), Update> {
     if condition {
         return Ok(());
     }

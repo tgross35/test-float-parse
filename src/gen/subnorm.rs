@@ -1,9 +1,5 @@
-use crate::{update_buf_from_bits, validate};
 use crate::{Float, Generator, Int};
 use std::cmp::min;
-use std::fmt::Write;
-use std::mem::transmute;
-use std::sync::LazyLock;
 
 /// Spot check some edge cases for subnormals
 pub struct SubnormEdge<F: Float> {
@@ -61,11 +57,7 @@ impl<F: Float> Iterator for SubnormEdge<F> {
     }
 }
 
-/// Test
 impl<F: Float> SubnormComplete<F> {
-    /// Shorthand
-    const I1: F::Int = F::Int::ONE;
-
     /// Values up to this number get linearly spaced. Above this they get powers
     /// of two.
     fn linspace_max() -> F::Int {

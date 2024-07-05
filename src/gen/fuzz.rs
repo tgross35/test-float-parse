@@ -19,13 +19,13 @@
 
 use std::{marker::PhantomData, ops::Range};
 
-use crate::{update_buf_from_bits, Float, Generator, Int, SEED};
+use crate::{Float, Generator, Int, SEED};
 use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
     ChaCha8Rng,
 };
 
-const FUZZ_COUNT: u64 = 10_000_000;
+const FUZZ_COUNT: u64 = 20_000_000;
 
 pub struct Fuzz<F> {
     iter: Range<u64>,

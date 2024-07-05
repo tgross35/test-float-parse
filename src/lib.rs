@@ -1,17 +1,16 @@
-#![allow(unused)]
+// #![allow(unused)]
 
 mod traits;
 mod validate;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::prelude::*;
 use std::any::{type_name, TypeId};
-use std::collections::HashMap;
 use std::io::prelude::*;
-use std::ops::ControlFlow;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{fmt, fs, io, mem, ops, sync::mpsc, thread, time};
+use std::sync::OnceLock;
+use std::{fs, io, sync::mpsc, time};
 use time::{Duration, Instant};
 
 use traits::{Float, Generator, Int};
@@ -30,9 +29,98 @@ pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
 
 /// If there are more tests than this threashold, we launch them last and use parallel
 /// iterators.
-const HUGE_TEST_CUTOFF: u64 = 1_000_000;
+const HUGE_TEST_CUTOFF: u64 = 5_000_000;
+const PB_TEMPLATE:&str =
+        "[{elapsed:3} {percent:3}%] {bar:20.cyan/blue} NAME ({pos}/{len}, {msg} f, {per_sec}, eta {eta})";
+const PB_TEMPLATE_FINAL: &str =
+    "[{elapsed:3} {percent:3}%] NAME ({pos}/{len}, {msg:.COLOR}, {per_sec}, eta {eta})";
 
-/// Message passed from a test runner to the host
+/// Global configuration
+#[derive(Debug)]
+pub struct Config {
+    pub timeout: Duration,
+    /// Failures per test
+    pub max_failures: Option<u64>,
+}
+
+/// Configuration for a test
+#[derive(Debug)]
+pub struct TestInfo {
+    id: TypeId,
+    f_name: &'static str,
+    gen_name: &'static str,
+    pub name: String,
+    short_name: String,
+    total_tests: u64,
+    launch: for<'s> fn(mpsc::Sender<Msg>, &TestInfo, &Config),
+    pb: Option<ProgressBar>,
+    completed: OnceLock<Completed>,
+}
+
+impl TestInfo {
+    /// Create a progress bar for this test in a multiprogress bar
+    fn register_pb(&mut self, mp: &MultiProgress, drop_bars: &mut Vec<ProgressBar>) {
+        let pb = mp.add(ProgressBar::new(self.total_tests));
+        let short_name_padded = format!("{:16}", self.short_name);
+        let pb_style =
+            ProgressStyle::with_template(&PB_TEMPLATE.replace("NAME", &short_name_padded))
+                .unwrap()
+                .progress_chars("##-");
+
+        pb.set_style(pb_style.clone());
+        pb.set_message("0 f");
+        drop_bars.push(pb.clone());
+        self.pb = Some(pb)
+    }
+
+    /// When the test is finished, update progress bar messages and finalize.
+    fn finalize_pb(&self, c: &Completed) {
+        let pb = self.pb.as_ref().unwrap();
+        let short_name_padded = format!("{:16}", self.short_name);
+        let f = c.failures;
+
+        // Use a tuple so we can use colors
+        let (color, msg, finish): (&str, String, fn(&ProgressBar, String)) = match c.result {
+            Ok(Finished) if f > 0 => (
+                "red",
+                format!("{f} f (finished with errors)",),
+                ProgressBar::finish_with_message,
+            ),
+            Ok(Finished) => (
+                "green",
+                format!("{f} f (finished successfully)",),
+                ProgressBar::finish_with_message,
+            ),
+            Err(EarlyExit::Timeout) => (
+                "red",
+                format!("{f} f (timed out)"),
+                ProgressBar::abandon_with_message,
+            ),
+            Err(EarlyExit::MaxFailures) => (
+                "red",
+                format!("{f} f (failure limit)"),
+                ProgressBar::abandon_with_message,
+            ),
+        };
+
+        let pb_style = ProgressStyle::with_template(
+            &PB_TEMPLATE_FINAL
+                .replace("NAME", &short_name_padded)
+                .replace("COLOR", color),
+        )
+        .unwrap();
+
+        pb.set_style(pb_style);
+        finish(pb, msg);
+    }
+
+    /// True if this should be run using parallel iterators.
+    fn is_huge_test(&self) -> bool {
+        self.total_tests >= HUGE_TEST_CUTOFF
+    }
+}
+
+/// A message sent from test runner threads to the thread doing UI and logs
 #[derive(Clone, Debug)]
 struct Msg {
     id: TypeId,
@@ -48,22 +136,20 @@ impl Msg {
     }
 
     /// Get the matching test from a list
-    fn find_test<'a>(&self, tests: &'a mut [TestInfo]) -> &'a mut TestInfo {
-        tests.iter_mut().find(|t| t.id == self.id).unwrap()
+    fn find_test<'a>(&self, tests: &'a [TestInfo]) -> &'a TestInfo {
+        tests.iter().find(|t| t.id == self.id).unwrap()
     }
 
-    fn handle(self, tests: &mut [TestInfo], out: &mut Tee, mp: &MultiProgress) {
+    fn handle(self, tests: &[TestInfo], out: &mut Tee, mp: &MultiProgress) {
         let test = self.find_test(tests);
-        let mut pb = &mut test.pb.as_mut().unwrap();
+        let pb = test.pb.as_ref().unwrap();
 
         match self.update {
             Update::Started => {
                 out.write_mp(mp, format!("Testing '{}'", test.name));
             }
-            Update::Progress {
-                executed,
-                duration_each_us,
-            } => {
+            Update::Progress { executed, failures } => {
+                pb.set_message(format! {"{failures} f"});
                 pb.set_position(executed);
             }
             Update::Failure { fail, input } => {
@@ -79,38 +165,46 @@ impl Msg {
             Update::Completed(c) => {
                 test.finalize_pb(&c);
 
+                let prefix = match c.result {
+                    Ok(Finished) => "Completed tests for",
+                    Err(EarlyExit::Timeout) => "Timed out",
+                    Err(EarlyExit::MaxFailures) => "Max failures reached for",
+                };
+
                 out.write_mp(
                     mp,
                     format!(
-                        "Completed tests for generator '{}' in {:?}. {} tests run, {} failures",
+                        "{prefix} generator '{}' in {:?}. {} tests run, {} failures",
                         test.name, c.elapsed, c.executed, c.failures
                     ),
                 );
-                test.completed = Some(c);
+                test.completed.set(c).unwrap();
             }
         };
     }
 }
 
+/// Status of a message
 #[derive(Clone, Debug)]
 enum Update {
     Started,
     /// Completed a out of b tests
     Progress {
         executed: u64,
-        duration_each_us: u64,
+        failures: u64,
     },
     /// Received a failed test
     Failure {
-        fail: Failure,
+        fail: CheckFailure,
         input: Box<str>,
     },
     /// Exited with an unexpected condition
     Completed(Completed),
 }
 
+/// An input did not parse successfully
 #[derive(Clone, Copy, Debug)]
-enum Failure {
+enum CheckFailure {
     /// Above the zero cutoff but got rounded to zero
     RoundedToZero,
     /// Below the infinity cutoff but got rounded to infinity
@@ -121,63 +215,45 @@ enum Failure {
     ExpectedNan,
 }
 
-impl Failure {
+impl CheckFailure {
     fn msg(self) -> &'static str {
         match self {
-            Failure::RoundedToZero => "incorrectly rounded to 0 (expected nonzero)",
-            Failure::RoundedToInf => "incorrectly rounded to +inf (expected finite)",
-            Failure::RoundedToNegInf => "incorrectly rounded to -inf (expected finite)",
-            Failure::UnexpectedNan => "got a NaN where none was expected",
-            Failure::ExpectedNan => "expected a NaN but did not get it",
+            CheckFailure::RoundedToZero => "incorrectly rounded to 0 (expected nonzero)",
+            CheckFailure::RoundedToInf => "incorrectly rounded to +inf (expected finite)",
+            CheckFailure::RoundedToNegInf => "incorrectly rounded to -inf (expected finite)",
+            CheckFailure::UnexpectedNan => "got a NaN where none was expected",
+            CheckFailure::ExpectedNan => "expected a NaN but did not get it",
         }
     }
 }
 
-#[derive(Debug)]
-pub struct TestInfo {
-    id: TypeId,
-    f_name: &'static str,
-    gen_name: &'static str,
-    gen_short_name: &'static str,
-    pub name: String,
-    short_name: String,
-    run: bool,
-    total_tests: u64,
-    launch: for<'s> fn(&'s thread::Scope<'s, '_>, mpsc::Sender<Msg>, &TestInfo),
-    pb: Option<ProgressBar>,
-    completed: Option<Completed>,
-}
-
-impl TestInfo {
-    fn finalize_pb(&mut self, c: &Completed) {
-        let pb = self.pb.take().unwrap();
-        pb.set_message(format!("{} ({} failures)", self.short_name, c.failures));
-
-        pb.finish();
-    }
-
-    /// True if this should be run using parallel iterators.
-    fn is_huge_test(&self) -> bool {
-        self.total_tests >= HUGE_TEST_CUTOFF
-    }
-}
-
+/// Information about a completed test
 #[derive(Clone, Debug)]
 struct Completed {
+    /// Finished tests (both successful and failed)
     executed: u64,
     failures: u64,
-    /// Exists if exited with an error
-    result: Result<(), Box<str>>,
+    /// Extra exit information if unsuccessful
+    result: Result<Finished, EarlyExit>,
+    /// If there is something to warn about (e.g bad estimate), leave it here
+    warning: Option<Box<str>>,
+    /// Total time to run the test
     elapsed: Duration,
 }
 
-#[derive(Debug)]
-pub struct Config {
-    pub timeout: Duration,
+/// Marker for completing all tests
+#[derive(Clone, Debug)]
+struct Finished;
+
+/// Reasons for exiting early
+#[derive(Clone, Debug)]
+enum EarlyExit {
+    Timeout,
+    MaxFailures,
 }
 
 /// Collect, filter, and launch all tests
-pub fn run(cfg: &Config, include: &[String], exclude: &[String]) -> ExitCode {
+pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
     let mut tests = register_tests();
 
     if !include.is_empty() {
@@ -188,8 +264,8 @@ pub fn run(cfg: &Config, include: &[String], exclude: &[String]) -> ExitCode {
 
     let (logfile, logfile_name) = log_file();
     let mut out = Tee { f: &logfile };
-    let elapsed = launch_tests(&mut tests, cfg, &mut out);
-    let ret = finish(&tests, elapsed, &mut out);
+    let elapsed = launch_tests(&mut tests, &cfg, &mut out);
+    let ret = finish(&tests, elapsed, &cfg, &mut out);
 
     drop(out);
     println!("wrote results to {logfile_name}");
@@ -197,16 +273,18 @@ pub fn run(cfg: &Config, include: &[String], exclude: &[String]) -> ExitCode {
     ret
 }
 
-/// Configure tests to run
+/// Configure tests to run but don't actaully run them
 pub fn register_tests() -> Vec<TestInfo> {
     let mut tests = Vec::new();
+
+    // Register normal generators for all floats
     register_float::<f32>(&mut tests);
     register_float::<f64>(&mut tests);
 
     // Don't run exhaustive for bits > 32, it would take years.
     register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
-    tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
 
+    tests.sort_unstable_by_key(|t| (t.f_name, t.gen_name));
     tests
 }
 
@@ -236,52 +314,30 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
         id: TypeId::of::<(F, G)>(),
         f_name,
         gen_name,
-        gen_short_name,
+        pb: None,
         name: format!("{f_name} {gen_name}"),
         short_name: format!("{f_name} {gen_short_name}"),
-        run: true,
         launch: launch_one::<F, G>,
         total_tests: G::total_tests(),
-        pb: None,
-        completed: None,
+        completed: OnceLock::new(),
     };
     v.push(info)
 }
 
-enum EndCondition {
-    Timeout,
-    Success(Duration),
-}
-
 /// Run all tests in `tests`
-fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Duration {
-    let (tx, rx) = mpsc::channel::<Msg>();
-    let total_tests = tests.len();
-    let mp = MultiProgress::new();
-    mp.set_move_cursor(true);
-    let pb_style = ProgressStyle::with_template(
-        "[{elapsed}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}",
-    )
-    .unwrap()
-    .progress_chars("##-");
-
+fn launch_tests(tests: &mut [TestInfo], cfg: &Config, out: &mut Tee) -> Duration {
     // Run shorter tests first
     tests.sort_unstable_by_key(|test| test.total_tests);
-
     for test in tests.iter() {
         out.write_sout(format!("Launching test '{}'", test.name));
     }
 
-    let start = Instant::now();
-
     let mut panic_drop_bars = Vec::new();
+    let mp = MultiProgress::new();
+    mp.set_move_cursor(true);
 
     for test in tests.iter_mut() {
-        let mut pb = mp.add(ProgressBar::new(test.total_tests));
-        pb.set_style(pb_style.clone());
-        pb.set_message(test.short_name.clone());
-        panic_drop_bars.push(pb.clone());
-        test.pb = Some(pb);
+        test.register_pb(&mp, &mut panic_drop_bars);
     }
 
     // indicatif likes to eat panic messages. This workaround isn't ideal, but it improves things.
@@ -291,64 +347,72 @@ fn launch_tests(tests: &mut [TestInfo], config: &Config, out: &mut Tee) -> Durat
         for bar in &panic_drop_bars {
             bar.abandon();
             println!();
-            io::stdout().flush();
-            io::stderr().flush();
+            io::stdout().flush().unwrap();
+            io::stderr().flush().unwrap();
         }
         hook(info);
     }));
 
-    thread::scope(move |scope| {
-        for test in tests.iter() {
-            (test.launch)(scope, tx.clone(), &test);
-        }
+    let (tx, rx) = mpsc::channel::<Msg>();
+    let start = Instant::now();
 
-        let end_condition = loop {
-            let elapsed = Instant::now() - start;
-            if elapsed > config.timeout {
-                break EndCondition::Timeout;
+    rayon::scope(|scope| {
+        let cfg = &cfg;
+
+        // Worker thread that updates the UI
+        scope.spawn(|_scope| {
+            let rx = rx; // move rx
+
+            loop {
+                if tests.iter().all(|t| t.completed.get().is_some()) {
+                    break;
+                }
+
+                let msg = rx.recv().unwrap();
+                msg.handle(tests, out, &mp);
             }
 
-            if tests.iter().all(|t| t.completed.is_some()) {
-                break EndCondition::Success(elapsed);
-            }
+            // All tests completed; finish things up
+            drop(mp);
+            assert_eq!(rx.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
+        });
 
-            let msg = rx.recv().unwrap();
-            msg.handle(tests, out, &mp);
-        };
+        // Don't let the thread pool be starved by huge tests. Run faster tests first in parallel,
+        // then parallelize only within the rest of the tests.
+        let (huge_tests, normal_tests): (Vec<_>, Vec<_>) =
+            tests.iter().partition(|t| t.is_huge_test());
 
-        drop(mp);
-        assert_eq!(rx.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
+        normal_tests
+            .par_iter()
+            .for_each(|test| ((test.launch)(tx.clone(), test, cfg)));
 
-        match end_condition {
-            EndCondition::Timeout => {
-                out.write_sout(format!("Timeout of {:?} reached", config.timeout))
-            }
-            EndCondition::Success(elapsed) => {
-                out.write_sout(format!("Completed {total_tests} tests in {elapsed:?}"))
-            }
-        }
+        huge_tests
+            .iter()
+            .for_each(|test| ((test.launch)(tx.clone(), test, cfg)));
     });
 
     Instant::now() - start
 }
 
-fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCode {
+/// Print final messages after all tests are complete.
+fn finish(tests: &[TestInfo], total_elapsed: Duration, cfg: &Config, out: &mut Tee) -> ExitCode {
     out.write_sout(format!("\n\nResults:"));
 
     let mut failed_generators = 0;
-    let mut errored_generators = 0;
+    let mut stopped_generators = 0;
 
     for t in tests {
         let Completed {
             executed,
             failures,
             elapsed,
+            warning,
             result,
-        } = t.completed.as_ref().unwrap();
+        } = t.completed.get().unwrap();
 
         let stat = if result.is_err() {
-            errored_generators += 1;
-            "ERROR"
+            stopped_generators += 1;
+            "STOPPED"
         } else if *failures > 0 {
             failed_generators += 1;
             "FAILURE"
@@ -362,20 +426,32 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
             passed = executed - failures,
         ));
 
-        if let Err(reason) = result {
-            out.write_sout(format!("      reason: {reason}"));
+        if let Some(warning) = warning {
+            out.write_sout(format!("      warning: {warning}"));
+        }
+
+        match result {
+            Ok(Finished) => (),
+            Err(EarlyExit::Timeout) => out.write_sout(format!(
+                "      exited early; exceded {:?} timeout",
+                cfg.timeout
+            )),
+            Err(EarlyExit::MaxFailures) => out.write_sout(format!(
+                "      exited early; exceeded {:?} max failures",
+                cfg.max_failures
+            )),
         }
     }
 
     out.write_sout(format!(
-        "{passed}/{} tests succeeded in {total_elapsed:?} ({passed} passed, {} failed, {} errors)",
+        "{passed}/{} tests succeeded in {total_elapsed:?} ({passed} passed, {} failed, {} stopped)",
         tests.len(),
         failed_generators,
-        errored_generators,
-        passed = tests.len() - failed_generators - errored_generators,
+        stopped_generators,
+        passed = tests.len() - failed_generators - stopped_generators,
     ));
 
-    if failed_generators > 0 || errored_generators > 0 {
+    if failed_generators > 0 || stopped_generators > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -384,65 +460,81 @@ fn finish(tests: &[TestInfo], total_elapsed: Duration, out: &mut Tee) -> ExitCod
 
 /// Test runer for a single generator
 fn launch_one<'s, F: Float, G: Generator<F>>(
-    scope: &'s thread::Scope<'s, '_>,
     tx: mpsc::Sender<Msg>,
-    info: &TestInfo,
+    _info: &TestInfo,
+    cfg: &Config,
 ) {
-    scope.spawn(move || {
-        tx.send(Msg::new::<F, G>(Update::Started));
+    tx.send(Msg::new::<F, G>(Update::Started)).unwrap();
 
-        let mut est = G::total_tests();
-        let mut gen = G::new();
-        let mut executed = AtomicU64::new(0);
-        let mut failures = 0;
-        let mut result = Ok(());
+    let est = G::total_tests();
+    let gen = G::new();
+    let executed = AtomicU64::new(0);
+    let failures = AtomicU64::new(0);
 
-        let checks_per_update = (est / 100000).clamp(1, 1000);
-        let started = Instant::now();
+    let checks_per_update = (est / 100000).clamp(1, 1000);
+    let started = Instant::now();
 
-        let check_one = |test_str: String| {
-            let executed = executed.fetch_add(1, Ordering::Relaxed);
+    let check_one = |test_str: String| {
+        let executed = executed.fetch_add(1, Ordering::Relaxed);
 
-            match validate::validate::<F>(&test_str, G::PATTERNS_CONTAIN_NAN) {
-                Ok(()) => (),
-                Err(e) => tx.send(Msg::new::<F, G>(e)).unwrap(),
-            };
-
-            // Send periodic updates
-            if executed % checks_per_update == 0 {
-                let elapsed = Instant::now() - started;
-
-                tx.send(Msg::new::<F, G>(Update::Progress {
-                    executed,
-                    duration_each_us: (elapsed.as_micros() / u128::from(executed).max(1))
-                        .try_into()
-                        .unwrap(),
-                }))
-                .unwrap();
+        match validate::validate::<F>(&test_str, G::PATTERNS_CONTAIN_NAN) {
+            Ok(()) => (),
+            Err(e) => {
+                tx.send(Msg::new::<F, G>(e)).unwrap();
+                let f = failures.fetch_add(1, Ordering::Relaxed);
+                // End early if the limit is exceeded.
+                if cfg.max_failures.map_or(false, |mf| f >= mf) {
+                    return Err(EarlyExit::MaxFailures);
+                }
             }
         };
 
-        gen.par_bridge().for_each(check_one);
+        // Send periodic updates
+        if executed % checks_per_update == 0 {
+            let elapsed = Instant::now() - started;
+            let failures = failures.load(Ordering::Relaxed);
 
-        let elapsed = Instant::now() - started;
-        let executed = executed.into_inner();
+            tx.send(Msg::new::<F, G>(Update::Progress { executed, failures }))
+                .unwrap();
 
-        // Warn about bad estimates
-        if executed != est {
-            result = Err(format!(
+            if elapsed > cfg.timeout {
+                return Err(EarlyExit::Timeout);
+            }
+        }
+
+        Ok(())
+    };
+
+    // We use a map so we have a way to exit early, `for_each(drop)` ensures it is consumed.
+    let res = gen.par_bridge().try_for_each(check_one);
+
+    let elapsed = Instant::now() - started;
+    let executed = executed.into_inner();
+    let failures = failures.into_inner();
+
+    // Warn about bad estimates
+    let warning = if executed != est && res.is_ok() {
+        Some(
+            format!(
                 "executed tests != estimated ({executed} != {est}) for {}",
                 G::NAME
             )
-            .into());
-        }
+            .into(),
+        )
+    } else {
+        None
+    };
 
-        tx.send(Msg::new::<F, G>(Update::Completed(Completed {
-            executed,
-            failures,
-            elapsed,
-            result,
-        })));
-    });
+    let result = res.map(|()| Finished);
+
+    tx.send(Msg::new::<F, G>(Update::Completed(Completed {
+        executed,
+        failures,
+        elapsed,
+        warning,
+        result,
+    })))
+    .unwrap();
 }
 
 /// Open a file with a reasonable name that we can dump data to
@@ -471,7 +563,7 @@ impl<'a> Tee<'a> {
         s.push('\n');
         self.f.write(s.as_bytes()).unwrap();
         s.pop();
-        mb.println(s);
+        mb.println(s).unwrap();
     }
 
     /// Write to both the file and stdout. Includes newline.
@@ -481,12 +573,4 @@ impl<'a> Tee<'a> {
         self.f.write(s.as_bytes()).unwrap();
         io::stdout().write(s.as_bytes()).unwrap();
     }
-}
-
-/// Turn the integer into a float then print it in exponential format
-fn update_buf_from_bits<F: Float>(s: &mut String, i: F::Int) -> &str {
-    use std::fmt::Write;
-    s.clear();
-    write!(s, "{:e}", F::from_bits(i));
-    s
 }

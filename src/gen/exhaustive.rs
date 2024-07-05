@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use crate::{update_buf_from_bits, Float, Generator, Int, SEED};
+use crate::{Float, Generator, Int};
 
 /// Test every possible bit pattern. Not recommended for anything larger than `f32`!
 pub struct Exhaustive<F: Float> {

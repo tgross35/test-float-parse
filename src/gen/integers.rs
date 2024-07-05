@@ -1,9 +1,6 @@
-use std::{
-    fmt::Write,
-    ops::{Range, RangeInclusive},
-};
+use std::ops::{Range, RangeInclusive};
 
-use crate::{Float, Generator, Int};
+use crate::{Float, Generator};
 
 const SMALL_MAX_POW2: u32 = 19;
 
