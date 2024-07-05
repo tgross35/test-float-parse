@@ -1,23 +1,8 @@
-// extern crate rand;
-
-// use rand::{IsaacRng, Rng, SeedableRng};
-// use std::mem::transmute;
-// use test_float_parse::{validate, SEED};
-
-// fn main() {
-//     let mut rnd = IsaacRng::from_seed(&SEED);
-//     let mut i = 0;
-//     while i < 10_000_000 {
-//         let bits = rnd.next_u64();
-//         let x: f64 = unsafe { transmute(bits) };
-//         if x.is_finite() {
-//             validate(&format!("{:e}", x));
-//             i += 1;
-//         }
-//     }
-// }
-
-use std::{marker::PhantomData, ops::Range};
+use std::{
+    marker::PhantomData,
+    ops::Range,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{Float, Generator, Int, SEED};
 use rand_chacha::{
@@ -25,7 +10,7 @@ use rand_chacha::{
     ChaCha8Rng,
 };
 
-const FUZZ_COUNT: u64 = 20_000_000;
+pub static FUZZ_COUNT: AtomicU64 = AtomicU64::new(crate::DEFAULT_FUZZ_COUNT);
 
 pub struct Fuzz<F> {
     iter: Range<u64>,
@@ -40,14 +25,14 @@ impl<F: Float> Generator<F> for Fuzz<F> {
     const PATTERNS_CONTAIN_NAN: bool = true;
 
     fn total_tests() -> u64 {
-        FUZZ_COUNT
+        FUZZ_COUNT.load(Ordering::Relaxed)
     }
 
     fn new() -> Self {
         let rng = ChaCha8Rng::from_seed(SEED);
 
         Self {
-            iter: 0..FUZZ_COUNT,
+            iter: 0..FUZZ_COUNT.load(Ordering::Relaxed),
             rng,
             marker: PhantomData,
         }

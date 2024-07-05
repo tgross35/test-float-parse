@@ -18,13 +18,16 @@ Args:
   --list                   List available tests.
   --max-failures N         Limit to N failures per test. Defaults to 20. Pass
                            "--max-failures none" to remove this limit.
-    
+  --fuzz-count N           Run the fuzzer with N iterations. Only has an effect
+                           if fuzz tests are enabled. Pass `--fuzz-count none`
+                           to remove this limit.
 "#;
 
 enum ArgMode {
     Any,
     Timeout,
     Exclude,
+    FuzzCount,
     MaxFailures,
 }
 
@@ -52,6 +55,7 @@ fn main() -> ExitCode {
     let mut cfg = tfp::Config {
         timeout: Duration::from_secs(60 * 60 * 3),
         max_failures: Some(20),
+        fuzz_count: Some(tfp::DEFAULT_FUZZ_COUNT),
     };
 
     let mut mode = ArgMode::Any;
@@ -64,7 +68,8 @@ fn main() -> ExitCode {
             ArgMode::Any if arg == "--timeout" => mode = ArgMode::Timeout,
             ArgMode::Any if arg == "--exclude" => mode = ArgMode::Exclude,
             ArgMode::Any if arg == "--max-failures" => mode = ArgMode::MaxFailures,
-            ArgMode::Any if arg.starts_with("--") => panic!("Unknown argument {arg}"),
+            ArgMode::Any if arg == "--fuzz-count" => mode = ArgMode::FuzzCount,
+            ArgMode::Any if arg.starts_with("-") => panic!("Unknown argument {arg}"),
             ArgMode::Any => {
                 include.push(arg);
                 mode = ArgMode::Any;
@@ -76,9 +81,17 @@ fn main() -> ExitCode {
             ArgMode::MaxFailures => {
                 if arg == "none" {
                     cfg.max_failures = None;
-                    continue;
+                } else {
+                    cfg.max_failures = Some(arg.parse().unwrap());
                 }
-                cfg.max_failures = Some(arg.parse().unwrap());
+                mode = ArgMode::Any;
+            }
+            ArgMode::FuzzCount => {
+                if arg == "none" {
+                    cfg.fuzz_count = None;
+                } else {
+                    cfg.fuzz_count = Some(arg.parse().unwrap());
+                }
                 mode = ArgMode::Any;
             }
             ArgMode::Exclude => {

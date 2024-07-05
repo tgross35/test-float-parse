@@ -26,16 +26,21 @@ mod gen {
     pub mod subnorm;
 }
 
-pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
+/// Fuzz iterations to run if not specified
+pub const DEFAULT_FUZZ_COUNT: u64 = 20_000_000;
 
 /// If there are more tests than this threashold, we launch them last and use parallel
 /// iterators.
 const HUGE_TEST_CUTOFF: u64 = 5_000_000;
 
+/// Templates for progress bars
 const PB_TEMPLATE:&str =
         "[{elapsed:3} {percent:3}%] {bar:20.cyan/blue} NAME ({pos}/{len}, {msg} f, {per_sec}, eta {eta})";
 const PB_TEMPLATE_FINAL: &str =
     "[{elapsed:3} {percent:3}%] NAME ({pos}/{len}, {msg:.COLOR}, {per_sec}, {elapsed_precise})";
+
+/// Seed for tests that use a deterministic RNG
+pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
 
 /// Global configuration
 #[derive(Debug)]
@@ -43,6 +48,7 @@ pub struct Config {
     pub timeout: Duration,
     /// Failures per test
     pub max_failures: Option<u64>,
+    pub fuzz_count: Option<u64>,
 }
 
 /// Configuration for a test
@@ -270,6 +276,7 @@ enum EarlyExit {
 
 /// Collect, filter, and launch all tests
 pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
+    gen::fuzz::FUZZ_COUNT.store(cfg.fuzz_count.unwrap_or(u64::MAX), Ordering::Relaxed);
     let mut tests = register_tests();
 
     if !include.is_empty() {
