@@ -1,4 +1,4 @@
-use crate::validate::FloatConstants;
+use crate::validate::Constants;
 use num::bigint::ToBigInt;
 use num::Integer;
 use std::str::FromStr;
@@ -170,6 +170,23 @@ macro_rules! impl_float {
 }
 
 impl_float!(f32, u32, 32; f64, u64, 64);
+
+/// Float types that have an associated
+pub trait FloatConstants {
+    fn constants() -> &'static Constants;
+}
+
+impl FloatConstants for f32 {
+    fn constants() -> &'static Constants {
+        &crate::validate::F32_CONSTANTS
+    }
+}
+
+impl FloatConstants for f64 {
+    fn constants() -> &'static Constants {
+        &crate::validate::F64_CONSTANTS
+    }
+}
 
 /// A test generator. Should provide an iterator that produces strings with unique patterns
 /// to parse.

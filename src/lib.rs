@@ -6,6 +6,7 @@ mod validate;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::any::{type_name, TypeId};
+use std::fmt;
 use std::io::prelude::*;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +31,7 @@ pub const SEED: [u8; 32] = *b"3.141592653589793238462643383279";
 /// If there are more tests than this threashold, we launch them last and use parallel
 /// iterators.
 const HUGE_TEST_CUTOFF: u64 = 5_000_000;
+
 const PB_TEMPLATE:&str =
         "[{elapsed:3} {percent:3}%] {bar:20.cyan/blue} NAME ({pos}/{len}, {msg} f, {per_sec}, eta {eta})";
 const PB_TEMPLATE_FINAL: &str =
@@ -68,7 +70,7 @@ impl TestInfo {
                 .progress_chars("##-");
 
         pb.set_style(pb_style.clone());
-        pb.set_message("0 f");
+        pb.set_message("0");
         drop_bars.push(pb.clone());
         self.pb = Some(pb)
     }
@@ -149,17 +151,13 @@ impl Msg {
                 out.write_mp(mp, format!("Testing '{}'", test.name));
             }
             Update::Progress { executed, failures } => {
-                pb.set_message(format! {"{failures} f"});
+                pb.set_message(format! {"{failures}"});
                 pb.set_position(executed);
             }
             Update::Failure { fail, input } => {
                 out.write_mp(
                     mp,
-                    format!(
-                        "Failure in '{}': {}. parsing '{input}'",
-                        test.name,
-                        fail.msg()
-                    ),
+                    format!("Failure in '{}': {fail}. parsing '{input}'", test.name,),
                 );
             }
             Update::Completed(c) => {
@@ -203,7 +201,7 @@ enum Update {
 }
 
 /// An input did not parse successfully
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum CheckFailure {
     /// Above the zero cutoff but got rounded to zero
     RoundedToZero,
@@ -213,16 +211,34 @@ enum CheckFailure {
     RoundedToNegInf,
     UnexpectedNan,
     ExpectedNan,
+    InvalidReal {
+        error_float: Option<f64>,
+        error_str: Box<str>,
+    },
 }
 
-impl CheckFailure {
-    fn msg(self) -> &'static str {
+impl fmt::Display for CheckFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CheckFailure::RoundedToZero => "incorrectly rounded to 0 (expected nonzero)",
-            CheckFailure::RoundedToInf => "incorrectly rounded to +inf (expected finite)",
-            CheckFailure::RoundedToNegInf => "incorrectly rounded to -inf (expected finite)",
-            CheckFailure::UnexpectedNan => "got a NaN where none was expected",
-            CheckFailure::ExpectedNan => "expected a NaN but did not get it",
+            CheckFailure::RoundedToZero => write!(f, "incorrectly rounded to 0 (expected nonzero)"),
+            CheckFailure::RoundedToInf => {
+                write!(f, "incorrectly rounded to +inf (expected finite)")
+            }
+            CheckFailure::RoundedToNegInf => {
+                write!(f, "incorrectly rounded to -inf (expected finite)")
+            }
+            CheckFailure::UnexpectedNan => write!(f, "got a NaN where none was expected"),
+            CheckFailure::ExpectedNan => write!(f, "expected a NaN but did not get it"),
+            CheckFailure::InvalidReal {
+                error_float: as_float,
+                error_str: as_str,
+            } => {
+                write!(f, "real number did not parse correctly; error:{as_str}")?;
+                if let Some(float) = as_float {
+                    write!(f, " ({float})")?;
+                }
+                Ok(())
+            }
         }
     }
 }

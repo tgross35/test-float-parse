@@ -1,9 +1,13 @@
-use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive};
+use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
 
 use crate::{CheckFailure, Float, Int, Update};
 // use bigdecimal::BigDecimal;
 use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
 
+pub static F32_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f32>);
+pub static F64_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f64>);
+
+/// Property-based constants for a specific float type
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Constants {
@@ -12,8 +16,12 @@ pub struct Constants {
     zero_cutoff: BigRational,
     inf_cutoff: BigRational,
     neg_inf_cutoff: BigRational,
+    /// The powers of two for all relevant integers
     powers_of_two: BTreeMap<i32, BigRational>,
+    /// Half of each power of two
     half_ulp: BTreeMap<i32, BigRational>,
+    /// Handy to have around so we don't need to allocate for it
+    two: BigInt,
 }
 
 impl Constants {
@@ -21,15 +29,25 @@ impl Constants {
         let two_int = &BigInt::from_u32(2).unwrap();
         let two = &BigRational::from_integer(2.into());
 
+        // The minimum subnormal (aka minimum positive) value. Most negative power of two is the
+        // minimum exponent (bias - 1) plus the extra from shifting within the mantissa bits.
         let min_subnormal = two.pow(-(F::EXP_BIAS + F::MAN_BITS - 1).to_signed());
+
+        // The maximum value is the maximum exponent with a fully saturated mantissa. This
+        // is easiest to calculate by evaluating what the next value up would be if representable
+        // (zeroed mantissa, exponent increments by one, i.e. `2^(bias + 1)`), and subtracting
+        // a single LSB (`2 ^ (-mantissa_bits)`).
         let max = (two - two.pow(-F::MAN_BITS.to_signed())) * (two.pow(F::EXP_BIAS.to_signed()));
         let zero_cutoff = &min_subnormal / two_int;
-        let inf_cutoff = &max * two_int.pow(F::EXP_BIAS - F::MAN_BITS - 1);
+
+        //
+        let max_ulp = F::EXP_BIAS - F::MAN_BITS;
+        let inf_cutoff = &max + two_int.pow(max_ulp - 1);
         let neg_inf_cutoff = -&inf_cutoff;
 
         let powers_of_two: BTreeMap<i32, _> = (-1100_i32..1100).map(|n| (n, two.pow(n))).collect();
         let mut half_ulp = powers_of_two.clone();
-        half_ulp.iter_mut().for_each(|(_k, v)| *v = &*v / two);
+        half_ulp.iter_mut().for_each(|(_k, v)| *v = &*v / two_int);
 
         Self {
             min_subnormal,
@@ -39,27 +57,28 @@ impl Constants {
             neg_inf_cutoff,
             powers_of_two,
             half_ulp,
+            two: two_int.clone(),
         }
     }
 }
 
-static F32_CONSTANTS: LazyLock<Constants> = LazyLock::new(|| Constants::new::<f32>());
-static F64_CONSTANTS: LazyLock<Constants> = LazyLock::new(|| Constants::new::<f64>());
+/// Validate that a string parses correctly
+pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
+    let parsed: F = input.parse().unwrap_or_else(|e| {
+        panic!(
+            "parsing failed for {}: {e}. Input: {input}",
+            type_name::<F>()
+        )
+    });
 
-pub trait FloatConstants {
-    fn constants() -> &'static Constants;
-}
+    // Parsed float, decoded into significand and exponent
+    let decoded = decode(parsed, allow_nan);
 
-impl FloatConstants for f32 {
-    fn constants() -> &'static Constants {
-        &F32_CONSTANTS
-    }
-}
+    // Float parsed separately into a rational
+    let rational = parse_rational(input);
 
-impl FloatConstants for f64 {
-    fn constants() -> &'static Constants {
-        &F64_CONSTANTS
-    }
+    // Verify that the values match
+    decoded.check(rational, input)
 }
 
 /// The result of parsing to a float type
@@ -69,16 +88,16 @@ enum FloatRes<F: Float> {
     NegInf,
     Zero,
     Nan,
+    /// A real number with significand and exponent. Value is `sig * 2 ^ exp`.
     Real {
-        /// The significand as a signed integer
         sig: F::SInt,
-        /// The exponent
         exp: i32,
     },
 }
 
-#[cfg(test)]
 impl<F: Float> FloatRes<F> {
+    /// Remove trailing zeros in the significand and adjust the exponent
+    #[cfg(test)]
     fn normalize(self) -> Self {
         use std::cmp::min;
 
@@ -97,57 +116,83 @@ impl<F: Float> FloatRes<F> {
             _ => self,
         }
     }
-}
 
-pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
-    let parsed: F = input.parse().unwrap_or_else(|e| {
-        panic!(
-            "parsing failed for {}: {e}. Input: {input}",
-            type_name::<F>()
-        )
-    });
+    fn check(self, rational: Option<BigRational>, input: &str) -> Result<(), Update> {
+        let rational_is_nan = rational.is_none();
+        let consts = F::constants();
+        let bool_helper = |cond: bool, err| cond.then_some(()).ok_or(err);
 
-    // Parsed float, decoded into significand and exponent
-    let decoded = decode(parsed, allow_nan);
-    // Float parsed separately into a rational
-    let rational = parse_rational(input);
-    let rational_nan = rational.is_none();
-    let get_rational = || {
-        rational.ok_or(Update::Failure {
-            fail: CheckFailure::UnexpectedNan,
-            input: input.into(),
-        })
-    };
-
-    let consts = F::constants();
-
-    match decoded {
-        FloatRes::Zero => check(
-            get_rational()? <= consts.zero_cutoff,
-            input,
-            CheckFailure::RoundedToZero,
-        ),
-        FloatRes::Inf => check(
-            get_rational()? >= consts.inf_cutoff,
-            input,
-            CheckFailure::RoundedToInf,
-        ),
-        FloatRes::NegInf => check(
-            get_rational()? <= consts.neg_inf_cutoff,
-            input,
-            CheckFailure::RoundedToNegInf,
-        ),
-        FloatRes::Real { sig, exp } => {
-            // TODO
-            let approx = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
-            Ok(())
+        match self {
+            FloatRes::Zero => check_rational(
+                rational,
+                |r| bool_helper(r <= consts.zero_cutoff, CheckFailure::RoundedToZero),
+                input,
+            ),
+            FloatRes::Inf => check_rational(
+                rational,
+                |r| bool_helper(r >= consts.inf_cutoff, CheckFailure::RoundedToInf),
+                input,
+            ),
+            FloatRes::NegInf => check_rational(
+                rational,
+                |r| bool_helper(r <= consts.neg_inf_cutoff, CheckFailure::RoundedToNegInf),
+                input,
+            ),
+            FloatRes::Real { sig, exp } => {
+                check_rational(rational, |r| Self::validate_real(r, sig, exp), input)
+            }
+            FloatRes::Nan => ensure(rational_is_nan, input, CheckFailure::ExpectedNan),
         }
-        FloatRes::Nan => check(rational_nan, input, CheckFailure::ExpectedNan),
+    }
+
+    /// Check that `sig * 2^exp` is the same as `rational`, within the float's error margin
+    fn validate_real(rational: BigRational, sig: F::SInt, exp: i32) -> Result<(), CheckFailure> {
+        let consts = F::constants();
+        // Rational from the parsed value (`sig` and `exp`)
+        let parsed_rational =
+            dbg!(consts.powers_of_two.get(&exp).unwrap()) * sig.to_bigint().unwrap();
+        dbg!(&rational, &parsed_rational);
+        let error = (parsed_rational - rational).abs();
+
+        // Determine acceptable error at this exponent
+        let half_ulp = consts.half_ulp.get(&exp).unwrap();
+
+        if &error <= half_ulp {
+            return Ok(());
+        }
+
+        let one_ulp = consts.half_ulp.get(&(exp + 1)).unwrap();
+        assert_eq!(one_ulp, &(half_ulp * &consts.two));
+        dbg!(&error, &half_ulp, &one_ulp);
+
+        let relative_error = error / one_ulp;
+
+        Err(CheckFailure::InvalidReal {
+            error_float: relative_error.to_f64(),
+            error_str: relative_error.to_string().into(),
+        })
     }
 }
 
+/// Helper to generate errors. Verifies that
+fn check_rational(
+    rational: Option<BigRational>,
+    check: impl Fn(BigRational) -> Result<(), CheckFailure>,
+    input: &str,
+) -> Result<(), Update> {
+    let r = rational.ok_or(Update::Failure {
+        fail: CheckFailure::UnexpectedNan,
+        input: input.into(),
+    })?;
+
+    check(r).map_err(|fail| Update::Failure {
+        fail,
+        input: input.into(),
+    })
+}
+
 /// Assert that a condition is true, otherwise construct an `Err`
-fn check(condition: bool, input: &str, failure: CheckFailure) -> Result<(), Update> {
+fn ensure(condition: bool, input: &str, failure: CheckFailure) -> Result<(), Update> {
     if condition {
         return Ok(());
     }
@@ -158,6 +203,7 @@ fn check(condition: bool, input: &str, failure: CheckFailure) -> Result<(), Upda
     })
 }
 
+/// Decompose a float into its integral representation
 fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     let ione = F::SInt::ONE;
     let izero = F::SInt::ZERO;
@@ -248,6 +294,7 @@ fn parse_rational(s: &str) -> Option<BigRational> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num::ToPrimitive;
 
     #[test]
     fn test_parse_rational() {
@@ -342,5 +389,42 @@ mod tests {
         validate::<f32>("-1e1000", false).unwrap();
         validate::<f32>("1e-1000", false).unwrap();
         validate::<f32>("-1e-1000", false).unwrap();
+    }
+
+    #[test]
+    fn test_check() {
+        // Most of the arbitrary values come from checking against <http://weitz.de/ieee/>.
+        let r = &BigRational::from_float(10.0).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 10, 0).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 10, -1).unwrap_err();
+        FloatRes::<f32>::validate_real(r.clone(), 10, 1).unwrap_err();
+
+        let r = &BigRational::from_float(0.25).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 1, -2).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 2, -2).unwrap_err();
+
+        let r = &BigRational::from_float(1234.5678).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 0b100110100101001000101011, -13).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), 0b100110100101001000101010, -13).unwrap_err();
+        FloatRes::<f32>::validate_real(r.clone(), 0b100110100101001000101100, -13).unwrap_err();
+
+        let r = &BigRational::from_float(-1234.5678).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), -0b100110100101001000101011, -13).unwrap();
+        FloatRes::<f32>::validate_real(r.clone(), -0b100110100101001000101010, -13).unwrap_err();
+        FloatRes::<f32>::validate_real(r.clone(), -0b100110100101001000101100, -13).unwrap_err();
+    }
+
+    #[test]
+    fn check_constants() {
+        assert_eq!(F32_CONSTANTS.max.to_f32().unwrap(), f32::MAX);
+        assert_eq!(
+            F32_CONSTANTS.min_subnormal.to_f32().unwrap(),
+            f32::from_bits(0x1)
+        );
+        assert_eq!(F64_CONSTANTS.max.to_f64().unwrap(), f64::MAX);
+        assert_eq!(
+            F64_CONSTANTS.min_subnormal.to_f64().unwrap(),
+            f64::from_bits(0x1)
+        );
     }
 }
