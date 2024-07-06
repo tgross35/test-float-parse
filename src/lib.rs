@@ -17,6 +17,7 @@ use ui::Tee;
 
 pub use ui::create_log_file;
 
+/// Test generators.
 mod gen {
     pub mod exhaustive;
     pub mod exponents;

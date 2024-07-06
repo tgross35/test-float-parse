@@ -173,7 +173,7 @@ pub fn create_log_file() -> (fs::File, String) {
     )
 }
 
-/// Tee output to the file and
+/// Tee output to the file and either stdout or a progress bar.
 pub struct Tee<'a> {
     pub f: &'a fs::File,
 }
