@@ -117,7 +117,7 @@ impl<F: Float> FloatRes<F> {
     /// Given a known exact rational, check that this representation is accurate within the
     /// limits of the float representation. If not, construct a failure `Update` to send.
     ///
-    /// Rational = None` indicates a NaN.
+    /// `Rational = None` indicates a NaN.
     fn check(self, rational: Option<BigRational>, input: &str) -> Result<(), Update> {
         let rational_is_nan = rational.is_none();
         let consts = F::constants();
@@ -239,26 +239,24 @@ fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     } else if exponent_biased == F::EXP_SAT {
         if !allow_nan {
             assert_eq!(mantissa, izero, "Unexpected NaN for {}", f.to_bits().hex());
-        } else {
-            if mantissa != izero {
-                return FloatRes::Nan;
-            }
+        } else if mantissa != izero {
+            return FloatRes::Nan;
         }
 
         if f.is_sign_negative() {
             return FloatRes::NegInf;
-        } else {
-            return FloatRes::Inf;
-        };
+        }
+
+        return FloatRes::Inf;
     } else {
         // Set implicit bit
         mantissa |= ione << F::MAN_BITS;
     }
 
-    let mut exponent = exponent_biased as i32;
+    let mut exponent = i32::try_from(exponent_biased).unwrap();
 
     // Adjust for bias and the rnage of the mantissa
-    exponent -= (F::EXP_BIAS + F::MAN_BITS) as i32;
+    exponent -= i32::try_from(F::EXP_BIAS + F::MAN_BITS).unwrap();
 
     if f.is_sign_negative() {
         mantissa = mantissa.wrapping_neg();

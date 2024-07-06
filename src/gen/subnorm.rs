@@ -22,9 +22,9 @@ impl<F: Float> SubnormEdge<F> {
             // 0b00001000
             Self::I1 << ((F::MAN_BITS / 2) - 1),
             // 0b00001111
-            Self::I1 << (F::MAN_BITS / 2) - 1,
+            Self::I1 << ((F::MAN_BITS / 2) - 1),
             // 0b00001111
-            Self::I1 << (F::MAN_BITS / 2) - 1,
+            Self::I1 << ((F::MAN_BITS / 2) - 1),
             // 0b11111111
             F::MAN_MASK,
         ]

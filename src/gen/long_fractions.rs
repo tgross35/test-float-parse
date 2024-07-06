@@ -19,8 +19,7 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
     type WriteCtx = String;
 
     fn total_tests() -> u64 {
-        u64::try_from((MAX_DIGIT + 1) * u32::try_from(MAX_LEN + 1 - PREFIX.len()).unwrap()).unwrap()
-            + 1
+        u64::from((MAX_DIGIT + 1) * u32::try_from(MAX_LEN + 1 - PREFIX.len()).unwrap()) + 1
     }
 
     fn new() -> Self {

@@ -22,7 +22,7 @@ pub fn create_pb(
     all_bars: &mut Vec<ProgressBar>,
 ) -> ProgressBar {
     let pb = mp.add(ProgressBar::new(total_tests));
-    let short_name_padded = format!("{:16}", short_name);
+    let short_name_padded = format!("{short_name:16}");
     let pb_style = ProgressStyle::with_template(&PB_TEMPLATE.replace("NAME", &short_name_padded))
         .unwrap()
         .progress_chars("##-");
@@ -34,7 +34,7 @@ pub fn create_pb(
 }
 
 pub fn finalize_pb(pb: &ProgressBar, short_name: &str, c: &Completed) {
-    let short_name_padded = format!("{:16}", short_name);
+    let short_name_padded = format!("{short_name:16}");
     let f = c.failures;
 
     // Use a tuple so we can use colors
@@ -79,7 +79,7 @@ pub fn finish(
     cfg: &Config,
     out: &mut Tee,
 ) -> ExitCode {
-    out.write_sout(format!("\n\nResults:"));
+    out.write_sout("\n\nResults:");
 
     let mut failed_generators = 0;
     let mut stopped_generators = 0;
@@ -183,7 +183,7 @@ impl<'a> Tee<'a> {
     pub fn write_mp(&mut self, mb: &MultiProgress, s: impl Into<String>) {
         let mut s = s.into();
         s.push('\n');
-        self.f.write(s.as_bytes()).unwrap();
+        self.f.write_all(s.as_bytes()).unwrap();
         s.pop();
         mb.println(s).unwrap();
     }
@@ -192,7 +192,7 @@ impl<'a> Tee<'a> {
     pub fn write_sout(&mut self, s: impl Into<String>) {
         let mut s = s.into();
         s.push('\n');
-        self.f.write(s.as_bytes()).unwrap();
-        io::stdout().write(s.as_bytes()).unwrap();
+        self.f.write_all(s.as_bytes()).unwrap();
+        io::stdout().write_all(s.as_bytes()).unwrap();
     }
 }

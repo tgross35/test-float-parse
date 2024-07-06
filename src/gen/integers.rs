@@ -18,7 +18,7 @@ const LARGE_POWERS: Range<u32> = SMALL_MAX_POW2..128;
 /// We perturbe each large value around these ranges
 const LARGE_PERTURBATIONS: RangeInclusive<i128> = -256..=256;
 
-/// Test all integers up to 2 ^ MAX_POW2
+/// Test all integers up to `2 ^ MAX_POW2`
 pub struct SmallInt {
     iter: RangeInclusive<i32>,
 }

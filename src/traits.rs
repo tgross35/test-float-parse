@@ -50,7 +50,7 @@ pub trait Int:
     fn from_le_bytes(bytes: Self::Bytes) -> Self;
 
     fn hex(self) -> String {
-        format!("{:x}", self)
+        format!("{self:x}")
     }
 }
 

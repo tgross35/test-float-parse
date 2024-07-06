@@ -48,7 +48,9 @@ fn main() -> ExitCode {
     if args.iter().any(|arg| arg == "--list") {
         let tests = tfp::register_tests();
         println!("Available tests:");
-        tests.iter().for_each(|t| println!("{}", t.name));
+        for t in tests {
+            println!("{}", t.name);
+        }
 
         return ExitCode::SUCCESS;
     }
@@ -76,7 +78,7 @@ fn parse_args(args: Vec<String>) -> (tfp::Config, Vec<String>, Vec<String>) {
             ArgMode::Any if arg == "--exclude" => mode = ArgMode::Exclude,
             ArgMode::Any if arg == "--max-failures" => mode = ArgMode::MaxFailures,
             ArgMode::Any if arg == "--fuzz-count" => mode = ArgMode::FuzzCount,
-            ArgMode::Any if arg.starts_with("-") => {
+            ArgMode::Any if arg.starts_with('-') => {
                 panic!("Unknown argument {arg}. Usage:\n{HELP}")
             }
             ArgMode::Any => {

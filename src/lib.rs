@@ -58,7 +58,7 @@ pub struct TestInfo {
     short_name: String,
     total_tests: u64,
     /// Function to launch this test.
-    launch: for<'s> fn(mpsc::Sender<Msg>, &TestInfo, &Config),
+    launch: for<'s> fn(&mpsc::Sender<Msg>, &TestInfo, &Config),
     /// Progress bar to be updated.
     pb: Option<ProgressBar>,
     /// Once completed, this will be set.
@@ -73,7 +73,7 @@ impl TestInfo {
             self.total_tests,
             &self.short_name,
             drop_bars,
-        ))
+        ));
     }
 
     /// When the test is finished, update progress bar messages and finalize.
@@ -241,7 +241,7 @@ pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
     // With default parallelism, the CPU doesn't saturate. We don't need to be nice to
     // other processes, so do 1.5x to make sure we use all available resources.
     let threads = std::thread::available_parallelism()
-        .map(|v| v.into())
+        .map(Into::into)
         .unwrap_or(0)
         * 3
         / 2;
@@ -257,11 +257,11 @@ pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
     }
 
     let (logfile, logfile_name) = create_log_file();
+
     let mut out = Tee { f: &logfile };
     let elapsed = launch_tests(&mut tests, &cfg, &mut out);
     let ret = ui::finish(&tests, elapsed, &cfg, &mut out);
 
-    drop(out);
     println!("wrote results to {logfile_name}");
 
     ret
@@ -316,7 +316,7 @@ fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>
         total_tests: G::total_tests(),
         completed: OnceLock::new(),
     };
-    v.push(info)
+    v.push(info);
 }
 
 /// Run all tests in `tests`
@@ -367,22 +367,18 @@ fn launch_tests(tests: &mut [TestInfo], cfg: &Config, out: &mut Tee) -> Duration
         // Run the actual tests
         normal_tests
             .par_iter()
-            .for_each(|test| ((test.launch)(tx.clone(), test, cfg)));
+            .for_each(|test| ((test.launch)(&tx, test, cfg)));
 
         huge_tests
             .par_iter()
-            .for_each(|test| ((test.launch)(tx.clone(), test, cfg)));
+            .for_each(|test| ((test.launch)(&tx, test, cfg)));
     });
 
-    Instant::now() - start
+    start.elapsed()
 }
 
 /// Test runer for a single generator
-fn test_runner<'s, F: Float, G: Generator<F>>(
-    tx: mpsc::Sender<Msg>,
-    _info: &TestInfo,
-    cfg: &Config,
-) {
+fn test_runner<F: Float, G: Generator<F>>(tx: &mpsc::Sender<Msg>, _info: &TestInfo, cfg: &Config) {
     tx.send(Msg::new::<F, G>(Update::Started)).unwrap();
 
     let total = G::total_tests();
@@ -399,7 +395,7 @@ fn test_runner<'s, F: Float, G: Generator<F>>(
         buf.clear();
         G::write_string(buf, ctx);
 
-        match validate::validate::<F>(&buf, G::PATTERNS_CONTAIN_NAN) {
+        match validate::validate::<F>(buf, G::PATTERNS_CONTAIN_NAN) {
             Ok(()) => (),
             Err(e) => {
                 tx.send(Msg::new::<F, G>(e)).unwrap();
@@ -413,13 +409,12 @@ fn test_runner<'s, F: Float, G: Generator<F>>(
 
         // Send periodic updates
         if executed % checks_per_update == 0 {
-            let elapsed = Instant::now() - started;
             let failures = failures.load(Ordering::Relaxed);
 
             tx.send(Msg::new::<F, G>(Update::Progress { executed, failures }))
                 .unwrap();
 
-            if elapsed > cfg.timeout {
+            if started.elapsed() > cfg.timeout {
                 return Err(EarlyExit::Timeout);
             }
         }
@@ -433,7 +428,7 @@ fn test_runner<'s, F: Float, G: Generator<F>>(
         .par_bridge()
         .try_for_each_init(|| String::with_capacity(100), check_one);
 
-    let elapsed = Instant::now() - started;
+    let elapsed = started.elapsed();
     let executed = executed.into_inner();
     let failures = failures.into_inner();
 
@@ -453,9 +448,9 @@ fn test_runner<'s, F: Float, G: Generator<F>>(
     tx.send(Msg::new::<F, G>(Update::Completed(Completed {
         executed,
         failures,
-        elapsed,
-        warning,
         result,
+        warning,
+        elapsed,
     })))
     .unwrap();
 }
