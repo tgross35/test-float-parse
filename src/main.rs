@@ -69,7 +69,9 @@ fn main() -> ExitCode {
             ArgMode::Any if arg == "--exclude" => mode = ArgMode::Exclude,
             ArgMode::Any if arg == "--max-failures" => mode = ArgMode::MaxFailures,
             ArgMode::Any if arg == "--fuzz-count" => mode = ArgMode::FuzzCount,
-            ArgMode::Any if arg.starts_with("-") => panic!("Unknown argument {arg}"),
+            ArgMode::Any if arg.starts_with("-") => {
+                panic!("Unknown argument {arg}. Usage:\n{HELP}")
+            }
             ArgMode::Any => {
                 include.push(arg);
                 mode = ArgMode::Any;

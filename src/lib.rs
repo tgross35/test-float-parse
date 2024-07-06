@@ -276,6 +276,16 @@ enum EarlyExit {
 /// Collect, filter, and launch all tests
 pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
     gen::fuzz::FUZZ_COUNT.store(cfg.fuzz_count.unwrap_or(u64::MAX), Ordering::Relaxed);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(
+            std::thread::available_parallelism()
+                .map(|v| v.into())
+                .unwrap_or(0)
+                * 2,
+        )
+        .build_global()
+        .unwrap();
+
     let mut tests = register_tests();
 
     if !include.is_empty() {
