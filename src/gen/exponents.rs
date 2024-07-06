@@ -75,7 +75,7 @@ impl<F: Float> Generator<F> for LargeExponents<F> {
 
     fn new() -> Self {
         let iter =
-            LARGE_EXP_RANGE.flat_map(|exp| (0..LARGE_COEFF_MAX).map(move |coeff| (exp, coeff)));
+            LARGE_EXP_RANGE.flat_map(|exp| (0..LARGE_COEFF_MAX).map(move |coeff| (coeff, exp)));
 
         Self {
             iter: Box::new(iter),

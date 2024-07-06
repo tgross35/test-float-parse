@@ -1,11 +1,25 @@
-use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
-
 use crate::{CheckFailure, Float, Int, Update};
-// use bigdecimal::BigDecimal;
-use std::{any::type_name, collections::BTreeMap, str::FromStr, sync::LazyLock};
+use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
+use std::{
+    any::type_name, collections::BTreeMap, ops::RangeInclusive, str::FromStr, sync::LazyLock,
+};
 
+/// Cached float constants
 pub static F32_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f32>);
 pub static F64_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f64>);
+
+/// Powers of two that we store for constants. Account for binary128 which has a 15-bit exponent.
+const POWERS_OF_TWO_RANGE: RangeInclusive<i32> = (-(2 << 15))..=(2 << 15);
+
+/// Powers of ten that we cache. Account for binary128, which can fit +4932/-4931
+const POWERS_OF_TEN_RANGE: RangeInclusive<i32> = -5_000..=5_000;
+
+/// Cached powers of 10 so we can look them up rather than recreating.
+static POWERS_OF_TEN: LazyLock<BTreeMap<i32, BigRational>> = LazyLock::new(|| {
+    POWERS_OF_TEN_RANGE
+        .map(|exp| (exp, BigRational::from_u32(10).unwrap().pow(exp)))
+        .collect()
+});
 
 /// Property-based constants for a specific float type
 #[allow(dead_code)]
@@ -45,7 +59,8 @@ impl Constants {
         let inf_cutoff = &max + two_int.pow(F::EXP_BIAS - F::MAN_BITS - 1);
         let neg_inf_cutoff = -&inf_cutoff;
 
-        let powers_of_two: BTreeMap<i32, _> = (-1100_i32..1100).map(|n| (n, two.pow(n))).collect();
+        let powers_of_two: BTreeMap<i32, _> =
+            (POWERS_OF_TWO_RANGE).map(|n| (n, two.pow(n))).collect();
         let mut half_ulp = powers_of_two.clone();
         half_ulp.iter_mut().for_each(|(_k, v)| *v = &*v / two_int);
 
@@ -282,9 +297,13 @@ fn parse_rational(s: &str) -> Option<BigRational> {
         s = &s_owned;
     }
 
-    let mut r = BigRational::from_str(s)
-        .unwrap_or_else(|e| panic!("`BigRational::from_str(\"{s}\")` failed with {e}"));
-    r *= BigRational::from_u32(10).unwrap().pow(ten_exp);
+    // let pow = BigRational::from_u32(10).unwrap().pow(ten_exp);
+    let pow = POWERS_OF_TEN
+        .get(&ten_exp)
+        .unwrap_or_else(|| panic!("missing power of ten {ten_exp}"));
+    let r = pow
+        * BigInt::from_str(s)
+            .unwrap_or_else(|e| panic!("`BigInt::from_str(\"{s}\")` failed with {e}"));
     Some(r)
 }
 
