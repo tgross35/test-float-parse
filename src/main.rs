@@ -36,6 +36,7 @@ fn main() -> ExitCode {
         println!(
             "WARNING: running in debug mode. Release mode is recommended to reduce test duration."
         );
+        std::thread::sleep(Duration::from_secs(2));
     }
 
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -52,6 +53,13 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    let (cfg, include, exclude) = parse_args(args);
+
+    tfp::run(cfg, &include, &exclude)
+}
+
+/// Simple command argument parser
+fn parse_args(args: Vec<String>) -> (tfp::Config, Vec<String>, Vec<String>) {
     let mut cfg = tfp::Config {
         timeout: Duration::from_secs(60 * 60 * 3),
         max_failures: Some(20),
@@ -62,7 +70,6 @@ fn main() -> ExitCode {
     let mut include = Vec::new();
     let mut exclude = Vec::new();
 
-    // Simple command argument parser
     for arg in args {
         match mode {
             ArgMode::Any if arg == "--timeout" => mode = ArgMode::Timeout,
@@ -103,5 +110,5 @@ fn main() -> ExitCode {
         }
     }
 
-    tfp::run(cfg, &include, &exclude)
+    (cfg, include, exclude)
 }

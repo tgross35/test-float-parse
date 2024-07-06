@@ -1,3 +1,5 @@
+//! Interfaces used throughout this crate.
+
 use crate::validate::Constants;
 use num::bigint::ToBigInt;
 use num::Integer;
@@ -6,7 +8,8 @@ use std::{fmt, ops};
 
 #[allow(dead_code)]
 pub trait Int:
-    Copy
+    Clone
+    + Copy
     + fmt::Debug
     + fmt::Display
     + fmt::LowerHex
@@ -102,14 +105,7 @@ macro_rules! impl_int {
 impl_int!(u32, i32; u64, i64);
 
 pub trait Float:
-    Copy
-    + fmt::Debug
-    + fmt::LowerExp
-    + FromStr<Err: fmt::Display>
-    + FloatConstants
-    + Sized
-    + Send
-    + 'static
+    Copy + fmt::Debug + fmt::LowerExp + FromStr<Err: fmt::Display> + Sized + Send + 'static
 {
     /// Unsigned integer of same width
     type Int: Int<Signed = Self::SInt>;
@@ -136,11 +132,14 @@ pub trait Float:
     fn from_bits(i: Self::Int) -> Self;
     fn to_bits(self) -> Self::Int;
 
+    /// Rational constants associated with this float type.
+    fn constants() -> &'static Constants;
+
     fn is_sign_negative(self) -> bool {
         (self.to_bits() & Self::SIGN_MASK) > Self::Int::ZERO
     }
 
-    /// Exponent without adjustment
+    /// Exponent without adjustment for bias.
     fn exponent(self) -> u32 {
         ((self.to_bits() >> Self::MAN_BITS) & Self::EXP_SAT.try_into().unwrap())
             .try_into()
@@ -153,9 +152,9 @@ pub trait Float:
 }
 
 macro_rules! impl_float {
-    ($($ty:ty, $ity:ty, $bits:literal);+) => {
+    ($($fty:ty, $ity:ty, $bits:literal);+) => {
         $(
-            impl Float for $ty {
+            impl Float for $fty {
                 type Int = $ity;
                 type SInt = <Self::Int as Int>::Signed;
                 const BITS: u32 = $bits;
@@ -164,6 +163,11 @@ macro_rules! impl_float {
                 const SIGN_MASK: Self::Int = Self::Int::ONE << (Self::BITS-1);
                 fn from_bits(i: Self::Int) -> Self { Self::from_bits(i) }
                 fn to_bits(self) -> Self::Int { self.to_bits() }
+                fn constants() -> &'static Constants {
+                    use std::sync::LazyLock;
+                    static CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<$fty>);
+                    &CONSTANTS
+                }
             }
         )+
     }
@@ -171,44 +175,34 @@ macro_rules! impl_float {
 
 impl_float!(f32, u32, 32; f64, u64, 64);
 
-/// Float types that have an associated
-pub trait FloatConstants {
-    fn constants() -> &'static Constants;
-}
-
-impl FloatConstants for f32 {
-    fn constants() -> &'static Constants {
-        &crate::validate::F32_CONSTANTS
-    }
-}
-
-impl FloatConstants for f64 {
-    fn constants() -> &'static Constants {
-        &crate::validate::F64_CONSTANTS
-    }
-}
-
-/// Shorthand for synamic iterators that return the `WriteCtx` type.
-pub type BoxGenIter<T, F> = Box<dyn Iterator<Item = <T as Generator<F>>::WriteCtx> + Send>;
-
-/// A test generator. Should provide an iterator that produces strings with unique patterns
-/// to parse.
+/// A test generator. Should provide an iterator that produces unique patterns to parse.
+///
+/// The iterator needs to provide a `WriteCtx` (could be anything), which is then used to
+/// write the string at a later step. This is done separately so that we can reuse string
+/// allocations (which otherwise turn out to be a pretty expensive part of these tests).
 pub trait Generator<F: Float>: Iterator<Item = Self::WriteCtx> + Send + 'static {
+    /// Full display and filtering name
     const NAME: &'static str;
+
+    /// Name for display with the progress bar
     const SHORT_NAME: &'static str;
-    /// If false (default), validation will assert on NaN.
+
+    /// If false (default), validation will assert on NaN. Set `true` for random patterns like
+    /// fuzzers or exhaustive.
     const PATTERNS_CONTAIN_NAN: bool = false;
 
-    /// The context needed to create a test string
+    /// The context needed to create a test string.
     type WriteCtx: Send;
 
-    /// Approximate number of tests that will be run
+    /// Number of tests that will be run.
     fn total_tests() -> u64;
 
-    /// Create this generator
+    /// Constructor for this test generator.
     fn new() -> Self;
 
-    /// Write a test to the given string. This is done so that we can reuse string allocations
-    /// (an otherwise relatively expensive part of the tests).
+    /// Create a test string given write context, which was produced as a step from the iterator.
     fn write_string(s: &mut String, ctx: Self::WriteCtx);
 }
+/// For tests that use iterator combinators, it is easiest just to box the iterator than trying
+/// to specify its type. This is a shorthand.
+pub type BoxGenIter<This, F> = Box<dyn Iterator<Item = <This as Generator<F>>::WriteCtx> + Send>;

@@ -1,12 +1,10 @@
+//! Everything related to verifying that parsed outputs are correct.
+
 use crate::{CheckFailure, Float, Int, Update};
 use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
 use std::{
     any::type_name, collections::BTreeMap, ops::RangeInclusive, str::FromStr, sync::LazyLock,
 };
-
-/// Cached float constants
-pub static F32_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f32>);
-pub static F64_CONSTANTS: LazyLock<Constants> = LazyLock::new(Constants::new::<f64>);
 
 /// Powers of two that we store for constants. Account for binary128 which has a 15-bit exponent.
 const POWERS_OF_TWO_RANGE: RangeInclusive<i32> = (-(2 << 15))..=(2 << 15);
@@ -21,27 +19,32 @@ static POWERS_OF_TEN: LazyLock<BTreeMap<i32, BigRational>> = LazyLock::new(|| {
         .collect()
 });
 
-/// Property-based constants for a specific float type
+/// Rational property-related constants for a specific float type.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Constants {
+    /// The minimum positive value (a subnormal).
     min_subnormal: BigRational,
+    /// The maximum possible finite value.
     max: BigRational,
+    /// Cutoff between rounding to zero and rounding to the minimum value (min subnormal).
     zero_cutoff: BigRational,
+    /// Cutoff between rounding to the max value and rounding to infinity.
     inf_cutoff: BigRational,
+    /// Opposite of `inf_cutoff`
     neg_inf_cutoff: BigRational,
-    /// The powers of two for all relevant integers
+    /// The powers of two for all relevant integers.
     powers_of_two: BTreeMap<i32, BigRational>,
     /// Half of each power of two. ULP = "unit in last position", so these are one bit
     /// more precise than what is representable by the float (i.e. in between representable
     /// values).
     half_ulp: BTreeMap<i32, BigRational>,
-    /// Handy to have around so we don't need to allocate for it
+    /// Handy to have around so we don't need to reallocate for it
     two: BigInt,
 }
 
 impl Constants {
-    fn new<F: Float>() -> Self {
+    pub fn new<F: Float>() -> Self {
         let two_int = &BigInt::from_u32(2).unwrap();
         let two = &BigRational::from_integer(2.into());
 
@@ -96,7 +99,7 @@ pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
     decoded.check(rational, input)
 }
 
-/// The result of parsing to a float type
+/// The result of parsing a string to a float type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FloatRes<F: Float> {
     Inf,
@@ -111,27 +114,10 @@ enum FloatRes<F: Float> {
 }
 
 impl<F: Float> FloatRes<F> {
-    /// Remove trailing zeros in the significand and adjust the exponent
-    #[cfg(test)]
-    fn normalize(self) -> Self {
-        use std::cmp::min;
-
-        match self {
-            Self::Real { sig, exp } => {
-                if exp < 0 {
-                    let norm = min(sig.trailing_zeros(), exp.wrapping_neg().try_into().unwrap());
-                    Self::Real {
-                        sig: sig >> norm,
-                        exp: exp + i32::try_from(norm).unwrap(),
-                    }
-                } else {
-                    self
-                }
-            }
-            _ => self,
-        }
-    }
-
+    /// Given a known exact rational, check that this representation is accurate within the
+    /// limits of the float representation. If not, construct a failure `Update` to send.
+    ///
+    /// Rational = None` indicates a NaN.
     fn check(self, rational: Option<BigRational>, input: &str) -> Result<(), Update> {
         let rational_is_nan = rational.is_none();
         let consts = F::constants();
@@ -156,14 +142,24 @@ impl<F: Float> FloatRes<F> {
             FloatRes::Real { sig, exp } => {
                 check_rational(rational, |r| Self::validate_real(r, sig, exp), input)
             }
-            FloatRes::Nan => ensure(rational_is_nan, input, CheckFailure::ExpectedNan),
+            FloatRes::Nan => {
+                if rational_is_nan {
+                    Ok(())
+                } else {
+                    Err(Update::Failure {
+                        fail: CheckFailure::ExpectedNan,
+                        input: input.into(),
+                    })
+                }
+            }
         }
     }
 
     /// Check that `sig * 2^exp` is the same as `rational`, within the float's error margin
     fn validate_real(rational: BigRational, sig: F::SInt, exp: i32) -> Result<(), CheckFailure> {
         let consts = F::constants();
-        // Rational from the parsed value (`sig` and `exp`)
+        // Rational from the parsed value (`sig * 2^exp`). Use cached powers of two to be a bit
+        // faster.
         let parsed_rational = consts.powers_of_two.get(&exp).unwrap() * sig.to_bigint().unwrap();
         let error = (parsed_rational - rational).abs();
 
@@ -184,9 +180,30 @@ impl<F: Float> FloatRes<F> {
             error_str: relative_error.to_string().into(),
         })
     }
+
+    /// Remove trailing zeros in the significand and adjust the exponent
+    #[cfg(test)]
+    fn normalize(self) -> Self {
+        use std::cmp::min;
+
+        match self {
+            Self::Real { sig, exp } => {
+                // If there are trailing zeroes, remove them and increment the exponent instead
+                let shift = min(sig.trailing_zeros(), exp.wrapping_neg().try_into().unwrap());
+                Self::Real {
+                    sig: sig >> shift,
+                    exp: exp + i32::try_from(shift).unwrap(),
+                }
+            }
+            _ => self,
+        }
+    }
 }
 
-/// Helper to generate errors. Verifies that
+/// Helper to generate errors. Verifies that rational is not NaN, then pass it to the `check`
+/// function.
+///
+/// Generate a failure `Update` on error.
 fn check_rational(
     rational: Option<BigRational>,
     check: impl Fn(BigRational) -> Result<(), CheckFailure>,
@@ -203,24 +220,13 @@ fn check_rational(
     })
 }
 
-/// Assert that a condition is true, otherwise construct an `Err`
-fn ensure(condition: bool, input: &str, failure: CheckFailure) -> Result<(), Update> {
-    if condition {
-        return Ok(());
-    }
-
-    Err(Update::Failure {
-        fail: failure,
-        input: input.into(),
-    })
-}
-
-/// Decompose a float into its integral representation
+/// Decompose a float into its integral components.
+///
+/// If `allow_nan` is `false`, panic if `NaN` values are reached.
 fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     let ione = F::SInt::ONE;
     let izero = F::SInt::ZERO;
 
-    // let bits = output.to_bits();
     let mut exponent_biased = f.exponent();
     let mut mantissa = f.mantissa().to_signed();
 
@@ -264,7 +270,7 @@ fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     }
 }
 
-/// Turn a string into a rational
+/// Turn a string into a rational. `None` if `NaN`.
 fn parse_rational(s: &str) -> Option<BigRational> {
     let mut s = s; // lifetime rules
     if s == "NaN" {
@@ -432,14 +438,14 @@ mod tests {
 
     #[test]
     fn check_constants() {
-        assert_eq!(F32_CONSTANTS.max.to_f32().unwrap(), f32::MAX);
+        assert_eq!(f32::constants().max.to_f32().unwrap(), f32::MAX);
         assert_eq!(
-            F32_CONSTANTS.min_subnormal.to_f32().unwrap(),
+            f32::constants().min_subnormal.to_f32().unwrap(),
             f32::from_bits(0x1)
         );
-        assert_eq!(F64_CONSTANTS.max.to_f64().unwrap(), f64::MAX);
+        assert_eq!(f64::constants().max.to_f64().unwrap(), f64::MAX);
         assert_eq!(
-            F64_CONSTANTS.min_subnormal.to_f64().unwrap(),
+            f64::constants().min_subnormal.to_f64().unwrap(),
             f64::from_bits(0x1)
         );
     }
