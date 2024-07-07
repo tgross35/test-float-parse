@@ -10,6 +10,7 @@ resolver = "1"
 [dependencies]
 indicatif = { version = "0.17.8", default-features = false }
 num = "0.4.3"
+rand = "0.8.5"
 rand_chacha = "0.3"
 rayon = "1"
 

@@ -1,18 +1,19 @@
 use std::fmt::Write;
-use std::ops::{Range, RangeInclusive};
+use std::ops::RangeInclusive;
 
 use crate::traits::BoxGenIter;
 use crate::{Float, Generator};
 
 const SMALL_COEFF_MAX: i32 = 10_000;
-const SMALL_EXP_MAX: i32 = 301;
+const SMALL_EXP_MAX: i32 = 300;
 
 const SMALL_COEFF_RANGE: RangeInclusive<i32> = (-SMALL_COEFF_MAX)..=SMALL_COEFF_MAX;
 const SMALL_EXP_RANGE: RangeInclusive<i32> = (-SMALL_EXP_MAX)..=SMALL_EXP_MAX;
 
-const LARGE_COEFF_MAX: u32 = 100_000;
-const LARGE_EXP_RANGE: Range<u32> = 300..350;
+const LARGE_COEFF_RANGE: RangeInclusive<u32> = 0..=100_000;
+const LARGE_EXP_RANGE: RangeInclusive<u32> = 300..=350;
 
+/// Check `[0..10_000] * 10 ^ [0..300]`
 pub struct SmallExponents<F: Float> {
     iter: BoxGenIter<Self, F>,
 }
@@ -65,18 +66,22 @@ pub struct LargeExponents<F: Float> {
 
 impl<F: Float> Generator<F> for LargeExponents<F> {
     const NAME: &'static str = "large positive exponents";
-    const SHORT_NAME: &'static str = "large +exp";
+    const SHORT_NAME: &'static str = "large exp";
 
-    /// `(coefficient, exponent, is_negative)`
-    type WriteCtx = (u32, u32);
+    /// `(coefficient, exponent, is_positive)`
+    type WriteCtx = (u32, u32, bool);
 
     fn total_tests() -> u64 {
-        ((LARGE_COEFF_MAX - 1) * (LARGE_EXP_RANGE.end + 1 - LARGE_EXP_RANGE.start) * 2).into()
+        ((LARGE_EXP_RANGE.start() - LARGE_EXP_RANGE.end())
+            * (LARGE_COEFF_RANGE.start() - LARGE_COEFF_RANGE.end())
+            * 2)
+        .into()
     }
 
     fn new() -> Self {
-        let iter =
-            LARGE_EXP_RANGE.flat_map(|exp| (0..LARGE_COEFF_MAX).map(move |coeff| (coeff, exp)));
+        let iter = LARGE_EXP_RANGE
+            .flat_map(|exp| LARGE_COEFF_RANGE.map(move |coeff| (coeff, exp)))
+            .flat_map(|(coeff, exp)| [(coeff, exp, false), (coeff, exp, true)]);
 
         Self {
             iter: Box::new(iter),
@@ -84,46 +89,16 @@ impl<F: Float> Generator<F> for LargeExponents<F> {
     }
 
     fn write_string(s: &mut String, ctx: Self::WriteCtx) {
-        let (coeff, exp) = ctx;
-        write!(s, "{coeff}e{exp}").unwrap();
+        let (coeff, exp, is_positive) = ctx;
+        let sign = if is_positive { "" } else { "-" };
+        write!(s, "{sign}{coeff}e{exp}").unwrap();
     }
 }
 
 impl<F: Float> Iterator for LargeExponents<F> {
-    type Item = (u32, u32);
+    type Item = (u32, u32, bool);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
-    }
-}
-
-pub struct LargeNegExponents<F: Float>(LargeExponents<F>);
-
-impl<F: Float> Generator<F> for LargeNegExponents<F> {
-    const NAME: &'static str = "large negative exponents";
-    const SHORT_NAME: &'static str = "large -exp";
-
-    /// `(coefficient, exponent, is_negative)`
-    type WriteCtx = (u32, u32);
-
-    fn total_tests() -> u64 {
-        ((LARGE_COEFF_MAX - 1) * (LARGE_EXP_RANGE.end + 1 - LARGE_EXP_RANGE.start) * 2).into()
-    }
-
-    fn new() -> Self {
-        Self(LargeExponents::new())
-    }
-
-    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
-        let (coeff, exp) = ctx;
-        write!(s, "{coeff}e-{exp}").unwrap();
-    }
-}
-
-impl<F: Float> Iterator for LargeNegExponents<F> {
-    type Item = <Self as Generator<F>>::WriteCtx;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.iter.next()
     }
 }

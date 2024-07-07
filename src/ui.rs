@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-use crate::{Completed, Config, EarlyExit, Finished, TestInfo};
+use crate::{Completed, Config, EarlyExit, FinishedAll, TestInfo};
 
 /// Templates for progress bars.
 const PB_TEMPLATE:&str =
@@ -34,18 +34,19 @@ pub fn create_pb(
     pb
 }
 
+/// Removes the status bar and replace it with a message.
 pub fn finalize_pb(pb: &ProgressBar, short_name: &str, c: &Completed) {
     let short_name_padded = format!("{short_name:16}");
     let f = c.failures;
 
     // Use a tuple so we can use colors
     let (color, msg, finish_pb): (&str, String, fn(&ProgressBar, String)) = match &c.result {
-        Ok(Finished) if f > 0 => (
+        Ok(FinishedAll) if f > 0 => (
             "red",
             format!("{f} f (finished with errors)",),
             ProgressBar::finish_with_message,
         ),
-        Ok(Finished) => (
+        Ok(FinishedAll) => (
             "green",
             format!("{f} f (finished successfully)",),
             ProgressBar::finish_with_message,
@@ -115,7 +116,7 @@ pub fn finish(
         }
 
         match result {
-            Ok(Finished) => (),
+            Ok(FinishedAll) => (),
             Err(EarlyExit::Timeout) => out.write_sout(format!(
                 "      exited early; exceded {:?} timeout",
                 cfg.timeout

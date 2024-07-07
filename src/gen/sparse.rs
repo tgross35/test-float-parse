@@ -16,29 +16,27 @@ const fn make_powers_of_two() -> [u128; 128] {
     ret
 }
 
-/// Can't clone this result because of lifetime errors, just use a macro
+/// Can't clone this result because of lifetime errors, just use a macro.
 macro_rules! pow_iter {
     () => {
         (0..F::BITS).map(|i| F::Int::try_from(POWERS_OF_TWO[i as usize]).unwrap())
     };
 }
 
-/// Test all numbers that include three 1s in the binary representation
-pub struct FewOnes<F: Float>
-// where
-//     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+/// Test all numbers that include three 1s in the binary representation as integers.
+pub struct FewOnesInt<F: Float>
 where
-    FewOnes<F>: Generator<F>,
+    FewOnesInt<F>: Generator<F>,
 {
     iter: BoxGenIter<Self, F>,
 }
 
-impl<F: Float> Generator<F> for FewOnes<F>
+impl<F: Float> Generator<F> for FewOnesInt<F>
 where
     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
 {
-    const NAME: &'static str = "few ones";
-    const SHORT_NAME: &'static str = "few ones";
+    const NAME: &'static str = "few ones int";
+    const SHORT_NAME: &'static str = "few ones int";
 
     type WriteCtx = F::Int;
 
@@ -62,10 +60,44 @@ where
     }
 }
 
-impl<F: Float> Iterator for FewOnes<F> {
+impl<F: Float> Iterator for FewOnesInt<F> {
     type Item = F::Int;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
+    }
+}
+
+/// Similar to `FewOnesInt` except test those bit patterns as a float.
+pub struct FewOnesFloat<F: Float>(FewOnesInt<F>);
+
+impl<F: Float> Generator<F> for FewOnesFloat<F>
+where
+    <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+{
+    const NAME: &'static str = "few ones float";
+    const SHORT_NAME: &'static str = "few ones float";
+    const PATTERNS_CONTAIN_NAN: bool = true;
+
+    type WriteCtx = F;
+
+    fn total_tests() -> u64 {
+        FewOnesInt::<F>::total_tests()
+    }
+
+    fn new() -> Self {
+        Self(FewOnesInt::new())
+    }
+
+    fn write_string(s: &mut String, ctx: Self::WriteCtx) {
+        write!(s, "{ctx:e}").unwrap();
+    }
+}
+
+impl<F: Float> Iterator for FewOnesFloat<F> {
+    type Item = F;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|i| F::from_bits(i))
     }
 }

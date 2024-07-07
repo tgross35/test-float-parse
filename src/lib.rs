@@ -24,12 +24,13 @@ mod gen {
     pub mod fuzz;
     pub mod integers;
     pub mod long_fractions;
+    pub mod many_digits;
     pub mod sparse;
-    pub mod special;
+    pub mod spot_checks;
     pub mod subnorm;
 }
 
-/// Fuzz iterations to run if not specified.
+/// Fuzz iterations to run if not specified by CLI arg.
 pub const DEFAULT_FUZZ_COUNT: u64 = 100_000_000;
 
 /// If there are more tests than this threashold, the test will be defered until after all
@@ -48,10 +49,79 @@ pub struct Config {
     pub fuzz_count: Option<u64>,
 }
 
+/// Collect, filter, and launch all tests.
+pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
+    gen::fuzz::FUZZ_COUNT.store(cfg.fuzz_count.unwrap_or(u64::MAX), Ordering::Relaxed);
+
+    // With default parallelism, the CPU doesn't saturate. We don't need to be nice to
+    // other processes, so do 1.5x to make sure we use all available resources.
+    let threads = std::thread::available_parallelism()
+        .map(Into::into)
+        .unwrap_or(0)
+        * 3
+        / 2;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+        .unwrap();
+
+    let mut tests = register_tests();
+    tests.retain(|test| !exclude.iter().any(|exc| test.name.contains(exc)));
+    if !include.is_empty() {
+        tests.retain(|test| include.iter().any(|inc| test.name.contains(inc)));
+    }
+
+    let (logfile, logfile_name) = create_log_file();
+
+    let mut out = Tee { f: &logfile };
+    let elapsed = launch_tests(&mut tests, &cfg, &mut out);
+    let ret = ui::finish(&tests, elapsed, &cfg, &mut out);
+
+    println!("wrote results to {logfile_name}");
+
+    ret
+}
+
+/// Enumerate tests to run but don't actaully run them.
+pub fn register_tests() -> Vec<TestInfo> {
+    let mut tests = Vec::new();
+
+    // Register normal generators for all floats.
+    register_float::<f32>(&mut tests);
+    register_float::<f64>(&mut tests);
+
+    // Register exhaustive tests for <= 32 bits. No more because it would take years.
+    TestInfo::register::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
+
+    tests.sort_unstable_by_key(|t| (t.float_name, t.gen_name));
+    tests
+}
+
+/// Register all generators for a single float.
+fn register_float<F: Float>(tests: &mut Vec<TestInfo>)
+where
+    RangeInclusive<F::Int>: Iterator<Item = F::Int>,
+    <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+{
+    TestInfo::register::<F, gen::spot_checks::Special>(tests);
+    TestInfo::register::<F, gen::subnorm::SubnormEdgeCases<F>>(tests);
+    TestInfo::register::<F, gen::subnorm::SubnormComplete<F>>(tests);
+    TestInfo::register::<F, gen::exponents::SmallExponents<F>>(tests);
+    TestInfo::register::<F, gen::exponents::LargeExponents<F>>(tests);
+    TestInfo::register::<F, gen::sparse::FewOnesInt<F>>(tests);
+    TestInfo::register::<F, gen::sparse::FewOnesFloat<F>>(tests);
+    TestInfo::register::<F, gen::integers::SmallInt>(tests);
+    TestInfo::register::<F, gen::integers::LargeInt<F>>(tests);
+    TestInfo::register::<F, gen::long_fractions::RepeatingDecimal>(tests);
+    TestInfo::register::<F, gen::fuzz::Fuzz<F>>(tests);
+}
+
 /// Configuration for a single test.
 #[derive(Debug)]
 pub struct TestInfo {
     pub name: String,
+    /// Tests are identified by the type ID of `(F, G)` (tuple of the float and generator type).
+    /// This gives an easy way to associate messages with tests.
     id: TypeId,
     float_name: &'static str,
     gen_name: &'static str,
@@ -67,6 +137,26 @@ pub struct TestInfo {
 }
 
 impl TestInfo {
+    /// Create a `TestInfo` for a given float and generator, then add it to a list.
+    fn register<F: Float, G: Generator<F>>(v: &mut Vec<Self>) {
+        let f_name = type_name::<F>();
+        let gen_name = G::NAME;
+        let gen_short_name = G::SHORT_NAME;
+
+        let info = TestInfo {
+            id: TypeId::of::<(F, G)>(),
+            float_name: f_name,
+            gen_name,
+            pb: None,
+            name: format!("{f_name} {gen_name}"),
+            short_name: format!("{f_name} {gen_short_name}"),
+            launch: test_runner::<F, G>,
+            total_tests: G::total_tests(),
+            completed: OnceLock::new(),
+        };
+        v.push(info);
+    }
+
     /// Create a progress bar for this test within a multiprogress bar.
     fn register_pb(&mut self, mp: &MultiProgress, drop_bars: &mut Vec<ProgressBar>) {
         self.pb = Some(ui::create_pb(
@@ -97,6 +187,8 @@ struct Msg {
 }
 
 impl Msg {
+    /// Wrap an `Update` into a message for the specified type. We use the `TypeId` of `(F, G)` to
+    /// identify which test a message in the channel came from.
     fn new<F: Float, G: Generator<F>>(u: Update) -> Self {
         Self {
             id: TypeId::of::<(F, G)>(),
@@ -104,11 +196,12 @@ impl Msg {
         }
     }
 
-    /// Get the matching test from a list
+    /// Get the matching test from a list. Panics if not found.
     fn find_test<'a>(&self, tests: &'a [TestInfo]) -> &'a TestInfo {
         tests.iter().find(|t| t.id == self.id).unwrap()
     }
 
+    /// Update UI as needed for a single message received from the test runners.
     fn handle(self, tests: &[TestInfo], out: &mut Tee, mp: &MultiProgress) {
         let test = self.find_test(tests);
         let pb = test.pb.as_ref().unwrap();
@@ -131,7 +224,7 @@ impl Msg {
                 test.finalize_pb(&c);
 
                 let prefix = match c.result {
-                    Ok(Finished) => "Completed tests for",
+                    Ok(FinishedAll) => "Completed tests for",
                     Err(EarlyExit::Timeout) => "Timed out",
                     Err(EarlyExit::MaxFailures) => "Max failures reached for",
                 };
@@ -175,15 +268,15 @@ enum CheckFailure {
     UnexpectedNan,
     /// Expected `NaN`, got none.
     ExpectedNan,
-    /// Expected infinity, got finite
+    /// Expected infinity, got finite.
     ExpectedInf,
-    /// Expected negative infinity, got finite
+    /// Expected negative infinity, got finite.
     ExpectedNegInf,
     /// The value exceeded its error tolerance.
     InvalidReal {
-        /// Error from expected as a float.
+        /// Error from the expected value, as a float.
         error_float: Option<f64>,
-        /// Error as a rational string, since it can't always be represented as a float.
+        /// Error as a rational string (since it can't always be represented as a float).
         error_str: Box<str>,
     },
 }
@@ -223,125 +316,43 @@ impl fmt::Display for CheckFailure {
 struct Completed {
     /// Finished tests (both successful and failed).
     executed: u64,
+    /// Failed tests.
     failures: u64,
     /// Extra exit information if unsuccessful.
-    result: Result<Finished, EarlyExit>,
+    result: Result<FinishedAll, EarlyExit>,
     /// If there is something to warn about (e.g bad estimate), leave it here.
     warning: Option<Box<str>>,
     /// Total time to run the test.
     elapsed: Duration,
 }
 
-/// Marker for completing all tests
+/// Marker for completing all tests (used in `Result` types).
 #[derive(Clone, Debug)]
-struct Finished;
+struct FinishedAll;
 
-/// Reasons for exiting early
+/// Reasons for exiting early.
 #[derive(Clone, Debug)]
 enum EarlyExit {
     Timeout,
     MaxFailures,
 }
 
-/// Collect, filter, and launch all tests.
-pub fn run(cfg: Config, include: &[String], exclude: &[String]) -> ExitCode {
-    gen::fuzz::FUZZ_COUNT.store(cfg.fuzz_count.unwrap_or(u64::MAX), Ordering::Relaxed);
-
-    // With default parallelism, the CPU doesn't saturate. We don't need to be nice to
-    // other processes, so do 1.5x to make sure we use all available resources.
-    let threads = std::thread::available_parallelism()
-        .map(Into::into)
-        .unwrap_or(0)
-        * 3
-        / 2;
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build_global()
-        .unwrap();
-
-    let mut tests = register_tests();
-    tests.retain(|test| !exclude.iter().any(|exc| test.name.contains(exc)));
-    if !include.is_empty() {
-        tests.retain(|test| include.iter().any(|inc| test.name.contains(inc)));
-    }
-
-    let (logfile, logfile_name) = create_log_file();
-
-    let mut out = Tee { f: &logfile };
-    let elapsed = launch_tests(&mut tests, &cfg, &mut out);
-    let ret = ui::finish(&tests, elapsed, &cfg, &mut out);
-
-    println!("wrote results to {logfile_name}");
-
-    ret
-}
-
-/// Configure tests to run but don't actaully run them
-pub fn register_tests() -> Vec<TestInfo> {
-    let mut tests = Vec::new();
-
-    // Register normal generators for all floats
-    register_float::<f32>(&mut tests);
-    register_float::<f64>(&mut tests);
-
-    // Don't run exhaustive for bits > 32, it would take years.
-    register_generator_for_float::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
-
-    tests.sort_unstable_by_key(|t| (t.float_name, t.gen_name));
-    tests
-}
-
-/// Register all generators for a single float
-fn register_float<F: Float>(tests: &mut Vec<TestInfo>)
-where
-    RangeInclusive<F::Int>: Iterator<Item = F::Int>,
-    <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
-{
-    register_generator_for_float::<F, gen::special::Special>(tests);
-    register_generator_for_float::<F, gen::subnorm::SubnormEdgeCases<F>>(tests);
-    register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(tests);
-    register_generator_for_float::<F, gen::exponents::SmallExponents<F>>(tests);
-    register_generator_for_float::<F, gen::exponents::LargeExponents<F>>(tests);
-    register_generator_for_float::<F, gen::exponents::LargeNegExponents<F>>(tests);
-    register_generator_for_float::<F, gen::sparse::FewOnes<F>>(tests);
-    register_generator_for_float::<F, gen::integers::SmallInt>(tests);
-    register_generator_for_float::<F, gen::integers::LargeInt<F>>(tests);
-    register_generator_for_float::<F, gen::long_fractions::RepeatingDecimal>(tests);
-    register_generator_for_float::<F, gen::fuzz::Fuzz<F>>(tests);
-}
-
-/// Register a single test generator for a specific float
-fn register_generator_for_float<F: Float, G: Generator<F>>(v: &mut Vec<TestInfo>) {
-    let f_name = type_name::<F>();
-    let gen_name = G::NAME;
-    let gen_short_name = G::SHORT_NAME;
-
-    let info = TestInfo {
-        id: TypeId::of::<(F, G)>(),
-        float_name: f_name,
-        gen_name,
-        pb: None,
-        name: format!("{f_name} {gen_name}"),
-        short_name: format!("{f_name} {gen_short_name}"),
-        launch: test_runner::<F, G>,
-        total_tests: G::total_tests(),
-        completed: OnceLock::new(),
-    };
-    v.push(info);
-}
-
-/// Run all tests in `tests`
+/// Run all tests in `tests`.
+///
+/// This launches a main thread that receives messages and handlees UI updates, and uses the
+/// rest of the thread pool to execute the tests.
 fn launch_tests(tests: &mut [TestInfo], cfg: &Config, out: &mut Tee) -> Duration {
     // Run shorter tests first
     tests.sort_unstable_by_key(|test| test.total_tests);
+
     for test in tests.iter() {
         out.write_sout(format!("Launching test '{}'", test.name));
     }
 
+    // Configure progress bars
     let mut all_progress_bars = Vec::new();
     let mp = MultiProgress::new();
     mp.set_move_cursor(true);
-
     for test in tests.iter_mut() {
         test.register_pb(&mp, &mut all_progress_bars);
     }
@@ -352,7 +363,7 @@ fn launch_tests(tests: &mut [TestInfo], cfg: &Config, out: &mut Tee) -> Duration
     let start = Instant::now();
 
     rayon::scope(|scope| {
-        // Worker thread that updates the UI
+        // Thread that updates the UI
         scope.spawn(|_scope| {
             let rx = rx; // move rx
 
@@ -388,7 +399,9 @@ fn launch_tests(tests: &mut [TestInfo], cfg: &Config, out: &mut Tee) -> Duration
     start.elapsed()
 }
 
-/// Test runer for a single generator
+/// Test runer for a single generator.
+///
+/// This calls the generator's iterator multiple times (in parallel) and validates each output.
 fn test_runner<F: Float, G: Generator<F>>(tx: &mpsc::Sender<Msg>, _info: &TestInfo, cfg: &Config) {
     tx.send(Msg::new::<F, G>(Update::Started)).unwrap();
 
@@ -455,7 +468,7 @@ fn test_runner<F: Float, G: Generator<F>>(tx: &mpsc::Sender<Msg>, _info: &TestIn
         None
     };
 
-    let result = res.map(|()| Finished);
+    let result = res.map(|()| FinishedAll);
     tx.send(Msg::new::<F, G>(Update::Completed(Completed {
         executed,
         failures,

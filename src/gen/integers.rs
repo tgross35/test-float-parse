@@ -52,7 +52,7 @@ impl Iterator for SmallInt {
     }
 }
 
-/// Test much bigger integers
+/// Test much bigger integers than [`SmallInt`].
 pub struct LargeInt<F: Float> {
     iter: BoxGenIter<Self, F>,
 }

@@ -8,7 +8,8 @@ use num::Integer;
 
 use crate::validate::Constants;
 
-#[allow(dead_code)]
+/// Integer types.
+#[allow(dead_code)] // Some functions only used for testing
 pub trait Int:
     Clone
     + Copy
@@ -106,6 +107,7 @@ macro_rules! impl_int {
 
 impl_int!(u32, i32; u64, i64);
 
+/// Floating point types.
 pub trait Float:
     Copy + fmt::Debug + fmt::LowerExp + FromStr<Err: fmt::Display> + Sized + Send + 'static
 {
@@ -203,8 +205,11 @@ pub trait Generator<F: Float>: Iterator<Item = Self::WriteCtx> + Send + 'static 
     fn new() -> Self;
 
     /// Create a test string given write context, which was produced as a step from the iterator.
+    ///
+    /// `s` will be provided empty.
     fn write_string(s: &mut String, ctx: Self::WriteCtx);
 }
-/// For tests that use iterator combinators, it is easiest just to box the iterator than trying
-/// to specify its type. This is a shorthand.
+
+/// For tests that use iterator combinators, it is easier to just to box the iterator than trying
+/// to specify its type. This is a shorthand for the usual type.
 pub type BoxGenIter<This, F> = Box<dyn Iterator<Item = <This as Generator<F>>::WriteCtx> + Send>;
