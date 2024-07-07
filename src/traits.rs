@@ -1,10 +1,12 @@
 //! Interfaces used throughout this crate.
 
-use crate::validate::Constants;
-use num::bigint::ToBigInt;
-use num::Integer;
 use std::str::FromStr;
 use std::{fmt, ops};
+
+use num::bigint::ToBigInt;
+use num::Integer;
+
+use crate::validate::Constants;
 
 #[allow(dead_code)]
 pub trait Int:

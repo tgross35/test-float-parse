@@ -2,21 +2,20 @@ mod traits;
 mod ui;
 mod validate;
 
-use indicatif::{MultiProgress, ProgressBar};
-use rayon::prelude::*;
 use std::any::{type_name, TypeId};
 use std::cmp::min;
-use std::fmt;
 use std::ops::RangeInclusive;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::{sync::mpsc, time};
+use std::sync::{mpsc, OnceLock};
+use std::{fmt, time};
+
+use indicatif::{MultiProgress, ProgressBar};
+use rayon::prelude::*;
 use time::{Duration, Instant};
 use traits::{Float, Generator, Int};
-use ui::Tee;
-
 pub use ui::create_log_file;
+use ui::Tee;
 
 /// Test generators.
 mod gen {

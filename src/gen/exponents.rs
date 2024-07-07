@@ -1,7 +1,8 @@
 use std::fmt::Write;
 use std::ops::{Range, RangeInclusive};
 
-use crate::{traits::BoxGenIter, Float, Generator};
+use crate::traits::BoxGenIter;
+use crate::{Float, Generator};
 
 const SMALL_COEFF_MAX: i32 = 10_000;
 const SMALL_EXP_MAX: i32 = 301;

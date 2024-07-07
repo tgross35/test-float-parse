@@ -1,7 +1,8 @@
-use crate::{Float, Generator, Int};
 use std::cmp::min;
 use std::fmt::Write;
 use std::ops::RangeInclusive;
+
+use crate::{Float, Generator, Int};
 
 /// Spot check some edge cases for subnormals.
 pub struct SubnormEdgeCases<F: Float> {

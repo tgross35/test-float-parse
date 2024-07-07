@@ -1,10 +1,15 @@
 //! Everything related to verifying that parsed outputs are correct.
 
+use std::any::type_name;
+use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
+use std::str::FromStr;
+use std::sync::LazyLock;
+
+use num::bigint::ToBigInt;
+use num::{BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
+
 use crate::{CheckFailure, Float, Int, Update};
-use num::{bigint::ToBigInt, BigInt, BigRational, FromPrimitive, Signed, ToPrimitive};
-use std::{
-    any::type_name, collections::BTreeMap, ops::RangeInclusive, str::FromStr, sync::LazyLock,
-};
 
 /// Powers of two that we store for constants. Account for binary128 which has a 15-bit exponent.
 const POWERS_OF_TWO_RANGE: RangeInclusive<i32> = (-(2 << 15))..=(2 << 15);
@@ -343,8 +348,9 @@ impl Rational {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use num::ToPrimitive;
+
+    use super::*;
 
     #[test]
     fn test_parse_rational() {

@@ -1,12 +1,13 @@
 //! Progress bars and such.
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-
-use crate::{Completed, Config, EarlyExit, Finished, TestInfo};
 use std::fs;
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime};
+
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+use crate::{Completed, Config, EarlyExit, Finished, TestInfo};
 
 /// Templates for progress bars.
 const PB_TEMPLATE:&str =

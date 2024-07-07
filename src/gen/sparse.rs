@@ -1,5 +1,7 @@
-use crate::{traits::BoxGenIter, Float, Generator};
 use std::fmt::Write;
+
+use crate::traits::BoxGenIter;
+use crate::{Float, Generator};
 
 const POWERS_OF_TWO: [u128; 128] = make_powers_of_two();
 

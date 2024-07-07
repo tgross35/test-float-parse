@@ -1,15 +1,12 @@
-use std::{
-    fmt::Write,
-    marker::PhantomData,
-    ops::Range,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fmt::Write;
+use std::marker::PhantomData;
+use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 use crate::{Float, Generator, Int, SEED};
-use rand_chacha::{
-    rand_core::{RngCore, SeedableRng},
-    ChaCha8Rng,
-};
 
 /// how many iterations to fuzz for; can be updated before launching.
 pub static FUZZ_COUNT: AtomicU64 = AtomicU64::new(crate::DEFAULT_FUZZ_COUNT);

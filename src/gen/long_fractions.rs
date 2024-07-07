@@ -1,4 +1,5 @@
-use std::{char, fmt::Write};
+use std::char;
+use std::fmt::Write;
 
 use crate::{Float, Generator};
 

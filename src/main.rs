@@ -1,4 +1,5 @@
-use std::{process::ExitCode, time::Duration};
+use std::process::ExitCode;
+use std::time::Duration;
 
 use test_float_parse as tfp;
 
