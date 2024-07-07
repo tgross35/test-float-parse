@@ -41,7 +41,6 @@ pub struct Constants {
     half_ulp: BTreeMap<i32, BigRational>,
     /// Handy to have around so we don't need to reallocate for it
     two: BigInt,
-    // inf: BigRational,
 }
 
 impl Constants {
@@ -117,8 +116,6 @@ enum FloatRes<F: Float> {
 impl<F: Float> FloatRes<F> {
     /// Given a known exact rational, check that this representation is accurate within the
     /// limits of the float representation. If not, construct a failure `Update` to send.
-    ///
-    /// `Rational = None` indicates a NaN.
     fn check(self, expected: Rational, input: &str) -> Result<(), Update> {
         let consts = F::constants();
         // let bool_helper = |cond: bool, err| cond.then_some(()).ok_or(err);
@@ -177,7 +174,7 @@ impl<F: Float> FloatRes<F> {
         })
     }
 
-    /// Check that `sig * 2^exp` is the same as `rational`, within the float's error margin
+    /// Check that `sig * 2^exp` is the same as `rational`, within the float's error margin.
     fn validate_real(rational: BigRational, sig: F::SInt, exp: i32) -> Result<(), CheckFailure> {
         let consts = F::constants();
         // Rational from the parsed value (`sig * 2^exp`). Use cached powers of two to be a bit
@@ -270,7 +267,7 @@ fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     }
 }
 
-/// A rational with
+/// A rational or its unrepresentable values.
 #[derive(Clone, Debug, PartialEq)]
 enum Rational {
     Inf,
@@ -386,6 +383,10 @@ mod tests {
                 10000000000000000000000_i128.into()
             )
         );
+        assert_eq!(Rational::parse("inf"), Rational::Inf);
+        assert_eq!(Rational::parse("+inf"), Rational::Inf);
+        assert_eq!(Rational::parse("-inf"), Rational::NegInf);
+        assert_eq!(Rational::parse("NaN"), Rational::Nan);
     }
 
     #[test]

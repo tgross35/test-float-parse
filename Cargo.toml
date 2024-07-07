@@ -16,6 +16,11 @@ rayon = "1"
 [lib]
 name = "test_float_parse"
 
+# Bigint libraries are slow without optimization, speed up testing
+[profile.dev.package."*"]
+opt-level = 3
+
+# Squeeze out the last bit of available speed
 [profile.release]
 codegen-units = 1
 lto = true
