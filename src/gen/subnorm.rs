@@ -1,14 +1,15 @@
 use crate::{Float, Generator, Int};
 use std::cmp::min;
 use std::fmt::Write;
+use std::ops::RangeInclusive;
 
-/// Spot check some edge cases for subnormals
-pub struct SubnormEdge<F: Float> {
+/// Spot check some edge cases for subnormals.
+pub struct SubnormEdgeCases<F: Float> {
     cases: [F::Int; 6],
     index: usize,
 }
 
-impl<F: Float> SubnormEdge<F> {
+impl<F: Float> SubnormEdgeCases<F> {
     /// Shorthand
     const I1: F::Int = F::Int::ONE;
 
@@ -31,7 +32,7 @@ impl<F: Float> SubnormEdge<F> {
     }
 }
 
-impl<F: Float> Generator<F> for SubnormEdge<F> {
+impl<F: Float> Generator<F> for SubnormEdgeCases<F> {
     const NAME: &'static str = "subnormal edge cases";
     const SHORT_NAME: &'static str = "subnorm edge";
 
@@ -53,7 +54,7 @@ impl<F: Float> Generator<F> for SubnormEdge<F> {
     }
 }
 
-impl<F: Float> Iterator for SubnormEdge<F> {
+impl<F: Float> Iterator for SubnormEdgeCases<F> {
     type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -64,31 +65,29 @@ impl<F: Float> Iterator for SubnormEdge<F> {
     }
 }
 
-impl<F: Float> SubnormComplete<F> {
-    /// Values up to this number get linearly spaced. Above this they get powers
-    /// of two.
-    fn linspace_max() -> F::Int {
-        <F::Int as Int>::ONE << 22
-    }
-}
-
-/// Test all
+/// Test all subnormals up to `1 << 22`.
 pub struct SubnormComplete<F: Float> {
-    num: F::Int,
+    iter: RangeInclusive<F::Int>,
 }
 
-impl<F: Float> Generator<F> for SubnormComplete<F> {
+impl<F: Float> Generator<F> for SubnormComplete<F>
+where
+    RangeInclusive<F::Int>: Iterator<Item = F::Int>,
+{
     const NAME: &'static str = "subnormal";
     const SHORT_NAME: &'static str = "subnorm ";
 
     type WriteCtx = F;
 
     fn new() -> Self {
-        Self { num: F::Int::ZERO }
+        Self {
+            iter: F::Int::ZERO..=min(F::Int::ONE << 22, F::MAN_BITS.try_into().unwrap()),
+        }
     }
 
     fn total_tests() -> u64 {
-        min(Self::linspace_max(), F::MAN_MASK).try_into().unwrap()
+        let iter = Self::new().iter;
+        (*iter.end() - *iter.start()).try_into().unwrap()
     }
 
     fn write_string(s: &mut String, ctx: Self::WriteCtx) {
@@ -96,22 +95,13 @@ impl<F: Float> Generator<F> for SubnormComplete<F> {
     }
 }
 
-impl<F: Float> Iterator for SubnormComplete<F> {
+impl<F: Float> Iterator for SubnormComplete<F>
+where
+    RangeInclusive<F::Int>: Iterator<Item = F::Int>,
+{
     type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.num >= F::MAN_MASK {
-            return None;
-        }
-
-        let ret = F::from_bits(self.num);
-
-        if self.num < Self::linspace_max() {
-            self.num += F::Int::ONE;
-        } else {
-            return None; // TODO
-        }
-
-        Some(ret)
+        Some(F::from_bits(self.iter.next()?))
     }
 }

@@ -41,6 +41,7 @@ pub struct Constants {
     half_ulp: BTreeMap<i32, BigRational>,
     /// Handy to have around so we don't need to reallocate for it
     two: BigInt,
+    // inf: BigRational,
 }
 
 impl Constants {
@@ -93,7 +94,7 @@ pub fn validate<F: Float>(input: &str, allow_nan: bool) -> Result<(), Update> {
     let decoded = decode(parsed, allow_nan);
 
     // Float parsed separately into a rational
-    let rational = parse_rational(input);
+    let rational = Rational::parse(input);
 
     // Verify that the values match
     decoded.check(rational, input)
@@ -118,41 +119,62 @@ impl<F: Float> FloatRes<F> {
     /// limits of the float representation. If not, construct a failure `Update` to send.
     ///
     /// `Rational = None` indicates a NaN.
-    fn check(self, rational: Option<BigRational>, input: &str) -> Result<(), Update> {
-        let rational_is_nan = rational.is_none();
+    fn check(self, expected: Rational, input: &str) -> Result<(), Update> {
         let consts = F::constants();
-        let bool_helper = |cond: bool, err| cond.then_some(()).ok_or(err);
+        // let bool_helper = |cond: bool, err| cond.then_some(()).ok_or(err);
 
-        match self {
-            FloatRes::Zero => check_rational(
-                rational,
-                |r| bool_helper(r <= consts.zero_cutoff, CheckFailure::RoundedToZero),
-                input,
-            ),
-            FloatRes::Inf => check_rational(
-                rational,
-                |r| bool_helper(r >= consts.inf_cutoff, CheckFailure::RoundedToInf),
-                input,
-            ),
-            FloatRes::NegInf => check_rational(
-                rational,
-                |r| bool_helper(r <= consts.neg_inf_cutoff, CheckFailure::RoundedToNegInf),
-                input,
-            ),
-            FloatRes::Real { sig, exp } => {
-                check_rational(rational, |r| Self::validate_real(r, sig, exp), input)
-            }
-            FloatRes::Nan => {
-                if rational_is_nan {
+        let res = match (expected, self) {
+            // Easy correct cases
+            (Rational::Inf, FloatRes::Inf)
+            | (Rational::NegInf, FloatRes::NegInf)
+            | (Rational::Nan, FloatRes::Nan) => Ok(()),
+
+            // Easy incorrect cases
+            (
+                Rational::Inf,
+                FloatRes::NegInf | FloatRes::Zero | FloatRes::Nan | FloatRes::Real { .. },
+            ) => Err(CheckFailure::ExpectedInf),
+            (
+                Rational::NegInf,
+                FloatRes::Inf | FloatRes::Zero | FloatRes::Nan | FloatRes::Real { .. },
+            ) => Err(CheckFailure::ExpectedNegInf),
+            (
+                Rational::Nan,
+                FloatRes::Inf | FloatRes::NegInf | FloatRes::Zero | FloatRes::Real { .. },
+            ) => Err(CheckFailure::ExpectedNan),
+            (Rational::Finite(_), FloatRes::Nan) => Err(CheckFailure::UnexpectedNan),
+
+            // Cases near limits
+            (Rational::Finite(r), FloatRes::Zero) => {
+                if r <= consts.zero_cutoff {
                     Ok(())
                 } else {
-                    Err(Update::Failure {
-                        fail: CheckFailure::ExpectedNan,
-                        input: input.into(),
-                    })
+                    Err(CheckFailure::UnexpectedZero)
                 }
             }
-        }
+            (Rational::Finite(r), FloatRes::Inf) => {
+                if r >= consts.inf_cutoff {
+                    Ok(())
+                } else {
+                    Err(CheckFailure::UnexpectedInf)
+                }
+            }
+            (Rational::Finite(r), FloatRes::NegInf) => {
+                if r <= consts.neg_inf_cutoff {
+                    Ok(())
+                } else {
+                    Err(CheckFailure::UnexpectedNegInf)
+                }
+            }
+
+            // Actual numbers
+            (Rational::Finite(r), FloatRes::Real { sig, exp }) => Self::validate_real(r, sig, exp),
+        };
+
+        res.map_err(|fail| Update::Failure {
+            fail,
+            input: input.into(),
+        })
     }
 
     /// Check that `sig * 2^exp` is the same as `rational`, within the float's error margin
@@ -198,26 +220,6 @@ impl<F: Float> FloatRes<F> {
             _ => self,
         }
     }
-}
-
-/// Helper to generate errors. Verifies that rational is not NaN, then pass it to the `check`
-/// function.
-///
-/// Generate a failure `Update` on error.
-fn check_rational(
-    rational: Option<BigRational>,
-    check: impl Fn(BigRational) -> Result<(), CheckFailure>,
-    input: &str,
-) -> Result<(), Update> {
-    let r = rational.ok_or(Update::Failure {
-        fail: CheckFailure::UnexpectedNan,
-        input: input.into(),
-    })?;
-
-    check(r).map_err(|fail| Update::Failure {
-        fail,
-        input: input.into(),
-    })
 }
 
 /// Decompose a float into its integral components.
@@ -268,47 +270,78 @@ fn decode<F: Float>(f: F, allow_nan: bool) -> FloatRes<F> {
     }
 }
 
-/// Turn a string into a rational. `None` if `NaN`.
-fn parse_rational(s: &str) -> Option<BigRational> {
-    let mut s = s; // lifetime rules
-    if s == "NaN" {
-        return None;
+/// A rational with
+#[derive(Clone, Debug, PartialEq)]
+enum Rational {
+    Inf,
+    NegInf,
+    Nan,
+    Finite(BigRational),
+}
+
+impl Rational {
+    /// Turn a string into a rational. `None` if `NaN`.
+    fn parse(s: &str) -> Rational {
+        let mut s = s; // lifetime rules
+
+        if s.strip_prefix('+').unwrap_or(s).eq_ignore_ascii_case("nan")
+            || s.eq_ignore_ascii_case("-nan")
+        {
+            return Rational::Nan;
+        }
+
+        if s.strip_prefix('+').unwrap_or(s).eq_ignore_ascii_case("inf") {
+            return Rational::Inf;
+        }
+
+        if s.eq_ignore_ascii_case("-inf") {
+            return Rational::NegInf;
+        }
+
+        // Fast path; no decimals or exponents ot parse
+        if s.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+            return Rational::Finite(BigRational::from_str(s).unwrap());
+        }
+
+        let mut ten_exp: i32 = 0;
+
+        // Remove and handle e.g. `e-4`, `e+10`, `e5` suffixes
+        if let Some(pos) = s.bytes().position(|b| b == b'e') {
+            let (dec, exp) = s.split_at(pos);
+            s = dec;
+            ten_exp = exp[1..].parse().unwrap();
+        }
+
+        // Remove the decimal and instead change our exponent
+        // E.g. "12.3456" becomes "123456 * 10^-4"
+        let mut s_owned;
+        if let Some(pos) = s.bytes().position(|b| b == b'.') {
+            ten_exp = ten_exp
+                .checked_sub((s.len() - pos - 1).try_into().unwrap())
+                .unwrap();
+            s_owned = s.to_owned();
+            s_owned.remove(pos);
+            s = &s_owned;
+        }
+
+        // let pow = BigRational::from_u32(10).unwrap().pow(ten_exp);
+        let pow = POWERS_OF_TEN
+            .get(&ten_exp)
+            .unwrap_or_else(|| panic!("missing power of ten {ten_exp}"));
+        let r = pow
+            * BigInt::from_str(s)
+                .unwrap_or_else(|e| panic!("`BigInt::from_str(\"{s}\")` failed with {e}"));
+        Rational::Finite(r)
     }
 
-    // Fast path; no decimals or exponents ot parse
-    if s.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-        return Some(BigRational::from_str(s).unwrap());
+    #[cfg(test)]
+    fn expect_finite(self) -> BigRational {
+        let Self::Finite(r) = self else {
+            panic!("got non rational: {self:?}");
+        };
+
+        r
     }
-
-    let mut ten_exp: i32 = 0;
-
-    // Remove and handle e.g. `e-4`, `e+10`, `e5` suffixes
-    if let Some(pos) = s.bytes().position(|b| b == b'e') {
-        let (dec, exp) = s.split_at(pos);
-        s = dec;
-        ten_exp = exp[1..].parse().unwrap();
-    }
-
-    // Remove the decimal and instead change our exponent
-    // E.g. "12.3456" becomes "123456 * 10^-4"
-    let mut s_owned;
-    if let Some(pos) = s.bytes().position(|b| b == b'.') {
-        ten_exp = ten_exp
-            .checked_sub((s.len() - pos - 1).try_into().unwrap())
-            .unwrap();
-        s_owned = s.to_owned();
-        s_owned.remove(pos);
-        s = &s_owned;
-    }
-
-    // let pow = BigRational::from_u32(10).unwrap().pow(ten_exp);
-    let pow = POWERS_OF_TEN
-        .get(&ten_exp)
-        .unwrap_or_else(|| panic!("missing power of ten {ten_exp}"));
-    let r = pow
-        * BigInt::from_str(s)
-            .unwrap_or_else(|e| panic!("`BigInt::from_str(\"{s}\")` failed with {e}"));
-    Some(r)
 }
 
 #[cfg(test)]
@@ -319,35 +352,35 @@ mod tests {
     #[test]
     fn test_parse_rational() {
         assert_eq!(
-            parse_rational("1234").unwrap(),
+            Rational::parse("1234").expect_finite(),
             BigRational::new(1234.into(), 1.into())
         );
         assert_eq!(
-            parse_rational("-1234").unwrap(),
+            Rational::parse("-1234").expect_finite(),
             BigRational::new((-1234).into(), 1.into())
         );
         assert_eq!(
-            parse_rational("1e+6").unwrap(),
+            Rational::parse("1e+6").expect_finite(),
             BigRational::new(1000000.into(), 1.into())
         );
         assert_eq!(
-            parse_rational("1e-6").unwrap(),
+            Rational::parse("1e-6").expect_finite(),
             BigRational::new(1.into(), 1000000.into())
         );
         assert_eq!(
-            parse_rational("10.4e6").unwrap(),
+            Rational::parse("10.4e6").expect_finite(),
             BigRational::new(10400000.into(), 1.into())
         );
         assert_eq!(
-            parse_rational("10.4e+6").unwrap(),
+            Rational::parse("10.4e+6").expect_finite(),
             BigRational::new(10400000.into(), 1.into())
         );
         assert_eq!(
-            parse_rational("10.4e-6").unwrap(),
+            Rational::parse("10.4e-6").expect_finite(),
             BigRational::new(13.into(), 1250000.into())
         );
         assert_eq!(
-            parse_rational("10.4243566462342456234124").unwrap(),
+            Rational::parse("10.4243566462342456234124").expect_finite(),
             BigRational::new(
                 104243566462342456234124_i128.into(),
                 10000000000000000000000_i128.into()

@@ -11,8 +11,10 @@ use rand_chacha::{
     ChaCha8Rng,
 };
 
+/// how many iterations to fuzz for; can be updated before launching.
 pub static FUZZ_COUNT: AtomicU64 = AtomicU64::new(crate::DEFAULT_FUZZ_COUNT);
 
+/// Generic fuzzer; just tests random bit patterns N times.
 pub struct Fuzz<F> {
     iter: Range<u64>,
     rng: ChaCha8Rng,

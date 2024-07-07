@@ -7,6 +7,7 @@ use rayon::prelude::*;
 use std::any::{type_name, TypeId};
 use std::cmp::min;
 use std::fmt;
+use std::ops::RangeInclusive;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -25,11 +26,12 @@ mod gen {
     pub mod integers;
     pub mod long_fractions;
     pub mod sparse;
+    pub mod special;
     pub mod subnorm;
 }
 
 /// Fuzz iterations to run if not specified.
-pub const DEFAULT_FUZZ_COUNT: u64 = 20_000_000;
+pub const DEFAULT_FUZZ_COUNT: u64 = 100_000_000;
 
 /// If there are more tests than this threashold, the test will be defered until after all
 /// others run (so as to avoid thread pool starvation).
@@ -165,15 +167,19 @@ enum Update {
 #[derive(Clone, Debug)]
 enum CheckFailure {
     /// Above the zero cutoff but got rounded to zero.
-    RoundedToZero,
+    UnexpectedZero,
     /// Below the infinity cutoff but got rounded to infinity.
-    RoundedToInf,
+    UnexpectedInf,
     /// Above the negative infinity cutoff but got rounded to negative infinity.
-    RoundedToNegInf,
+    UnexpectedNegInf,
     /// Got a `NaN` when none was expected.
     UnexpectedNan,
     /// Expected `NaN`, got none.
     ExpectedNan,
+    /// Expected infinity, got finite
+    ExpectedInf,
+    /// Expected negative infinity, got finite
+    ExpectedNegInf,
     /// The value exceeded its error tolerance.
     InvalidReal {
         /// Error from expected as a float.
@@ -186,15 +192,19 @@ enum CheckFailure {
 impl fmt::Display for CheckFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CheckFailure::RoundedToZero => write!(f, "incorrectly rounded to 0 (expected nonzero)"),
-            CheckFailure::RoundedToInf => {
+            CheckFailure::UnexpectedZero => {
+                write!(f, "incorrectly rounded to 0 (expected nonzero)")
+            }
+            CheckFailure::UnexpectedInf => {
                 write!(f, "incorrectly rounded to +inf (expected finite)")
             }
-            CheckFailure::RoundedToNegInf => {
+            CheckFailure::UnexpectedNegInf => {
                 write!(f, "incorrectly rounded to -inf (expected finite)")
             }
             CheckFailure::UnexpectedNan => write!(f, "got a NaN where none was expected"),
             CheckFailure::ExpectedNan => write!(f, "expected a NaN but did not get it"),
+            CheckFailure::ExpectedInf => write!(f, "expected +inf but did not get it"),
+            CheckFailure::ExpectedNegInf => write!(f, "expected -inf but did not get it"),
             CheckFailure::InvalidReal {
                 error_float,
                 error_str,
@@ -285,9 +295,11 @@ pub fn register_tests() -> Vec<TestInfo> {
 /// Register all generators for a single float
 fn register_float<F: Float>(tests: &mut Vec<TestInfo>)
 where
+    RangeInclusive<F::Int>: Iterator<Item = F::Int>,
     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
 {
-    register_generator_for_float::<F, gen::subnorm::SubnormEdge<F>>(tests);
+    register_generator_for_float::<F, gen::special::Special>(tests);
+    register_generator_for_float::<F, gen::subnorm::SubnormEdgeCases<F>>(tests);
     register_generator_for_float::<F, gen::subnorm::SubnormComplete<F>>(tests);
     register_generator_for_float::<F, gen::exponents::SmallExponents<F>>(tests);
     register_generator_for_float::<F, gen::exponents::LargeExponents<F>>(tests);
