@@ -80,15 +80,17 @@ where
 
     type WriteCtx = F;
 
+    fn total_tests() -> u64 {
+        let iter = Self::new().iter;
+        (F::Int::ONE + *iter.end() - *iter.start())
+            .try_into()
+            .unwrap()
+    }
+
     fn new() -> Self {
         Self {
             iter: F::Int::ZERO..=min(F::Int::ONE << 22, F::MAN_BITS.try_into().unwrap()),
         }
-    }
-
-    fn total_tests() -> u64 {
-        let iter = Self::new().iter;
-        (*iter.end() - *iter.start()).try_into().unwrap()
     }
 
     fn write_string(s: &mut String, ctx: Self::WriteCtx) {

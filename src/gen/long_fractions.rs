@@ -22,7 +22,7 @@ impl<F: Float> Generator<F> for RepeatingDecimal {
     type WriteCtx = String;
 
     fn total_tests() -> u64 {
-        u64::from((MAX_DIGIT + 1) * u32::try_from(MAX_DECIMALS + 1 - PREFIX.len()).unwrap()) + 1
+        u64::from(MAX_DIGIT + 1) * u64::try_from(MAX_DECIMALS + 1).unwrap() + 1
     }
 
     fn new() -> Self {
@@ -45,6 +45,7 @@ impl Iterator for RepeatingDecimal {
             return None;
         }
 
+        let digit = self.digit;
         let inc_digit = self.buf.len() - PREFIX.len() > MAX_DECIMALS;
 
         if inc_digit {
@@ -54,7 +55,7 @@ impl Iterator for RepeatingDecimal {
             self.buf.write_str(PREFIX).unwrap();
         }
 
-        self.buf.push(char::from_digit(self.digit, 10).unwrap());
+        self.buf.push(char::from_digit(digit, 10).unwrap());
         Some(self.buf.clone())
     }
 }
