@@ -50,7 +50,6 @@ pub trait Int:
     fn to_signed(self) -> Self::Signed;
     fn wrapping_neg(self) -> Self;
     fn trailing_zeros(self) -> u32;
-    fn from_le_bytes(bytes: Self::Bytes) -> Self;
 
     fn hex(self) -> String {
         format!("{self:x}")
@@ -76,9 +75,6 @@ macro_rules! impl_int {
                 fn trailing_zeros(self) -> u32 {
                     self.trailing_zeros()
                 }
-                fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                    Self::from_be_bytes(bytes)
-                }
             }
 
             impl Int for $sty {
@@ -96,9 +92,6 @@ macro_rules! impl_int {
                 }
                 fn trailing_zeros(self) -> u32 {
                     self.trailing_zeros()
-                }
-                fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                    Self::from_be_bytes(bytes)
                 }
             }
         )+

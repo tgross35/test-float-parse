@@ -11,6 +11,7 @@ use std::sync::{mpsc, OnceLock};
 use std::{fmt, time};
 
 use indicatif::{MultiProgress, ProgressBar};
+use rand::distributions::{Distribution, Standard};
 use rayon::prelude::*;
 use time::{Duration, Instant};
 use traits::{Float, Generator, Int};
@@ -102,6 +103,7 @@ fn register_float<F: Float>(tests: &mut Vec<TestInfo>)
 where
     RangeInclusive<F::Int>: Iterator<Item = F::Int>,
     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
+    Standard: Distribution<<F as traits::Float>::Int>,
 {
     TestInfo::register::<F, gen::exponents::LargeExponents<F>>(tests);
     TestInfo::register::<F, gen::exponents::SmallExponents<F>>(tests);

@@ -3,10 +3,12 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
+use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::{Float, Generator, Int, SEED};
+use crate::{Float, Generator, SEED};
 
 /// How many iterations to fuzz for; can be updated before launching. We use a static since
 /// `Generator::new` doesn't take any input.
@@ -20,7 +22,10 @@ pub struct Fuzz<F> {
     marker: PhantomData<F>,
 }
 
-impl<F: Float> Generator<F> for Fuzz<F> {
+impl<F: Float> Generator<F> for Fuzz<F>
+where
+    Standard: Distribution<<F as Float>::Int>,
+{
     const NAME: &'static str = "fuzz";
     const SHORT_NAME: &'static str = "fuzz";
     const PATTERNS_CONTAIN_NAN: bool = true;
@@ -46,15 +51,15 @@ impl<F: Float> Generator<F> for Fuzz<F> {
     }
 }
 
-impl<F: Float> Iterator for Fuzz<F> {
+impl<F: Float> Iterator for Fuzz<F>
+where
+    Standard: Distribution<<F as Float>::Int>,
+{
     type Item = <Self as Generator<F>>::WriteCtx;
 
     fn next(&mut self) -> Option<Self::Item> {
         let _ = self.iter.next()?;
-
-        let mut buf = <F::Int as Int>::Bytes::default();
-        self.rng.fill_bytes(buf.as_mut());
-        let i = F::Int::from_le_bytes(buf);
+        let i: F::Int = self.rng.gen();
 
         Some(F::from_bits(i))
     }
