@@ -13,7 +13,7 @@ const SMALL_EXP_RANGE: RangeInclusive<i32> = (-SMALL_EXP_MAX)..=SMALL_EXP_MAX;
 const LARGE_COEFF_RANGE: RangeInclusive<u32> = 0..=100_000;
 const LARGE_EXP_RANGE: RangeInclusive<u32> = 300..=350;
 
-/// Check `[0..10_000] * 10 ^ [0..300]`
+/// Check exponential values around zero.
 pub struct SmallExponents<F: Float> {
     iter: BoxGenIter<Self, F>,
 }
@@ -26,8 +26,8 @@ impl<F: Float> Generator<F> for SmallExponents<F> {
     type WriteCtx = (i32, i32);
 
     fn total_tests() -> u64 {
-        ((SMALL_COEFF_RANGE.end() - SMALL_COEFF_RANGE.start())
-            * (SMALL_EXP_RANGE.end() - SMALL_EXP_RANGE.start())
+        ((1 + SMALL_COEFF_RANGE.end() - SMALL_COEFF_RANGE.start())
+            * (1 + SMALL_EXP_RANGE.end() - SMALL_EXP_RANGE.start())
             * 2)
         .try_into()
         .unwrap()
@@ -60,6 +60,7 @@ impl<F: Float> Iterator for SmallExponents<F> {
     }
 }
 
+/// Check exponential values further from zero.
 pub struct LargeExponents<F: Float> {
     iter: BoxGenIter<Self, F>,
 }
@@ -72,8 +73,8 @@ impl<F: Float> Generator<F> for LargeExponents<F> {
     type WriteCtx = (u32, u32, bool);
 
     fn total_tests() -> u64 {
-        ((LARGE_EXP_RANGE.start() - LARGE_EXP_RANGE.end())
-            * (LARGE_COEFF_RANGE.start() - LARGE_COEFF_RANGE.end())
+        ((1 + LARGE_EXP_RANGE.end() - LARGE_EXP_RANGE.start())
+            * (1 + LARGE_COEFF_RANGE.end() - LARGE_COEFF_RANGE.start())
             * 2)
         .into()
     }

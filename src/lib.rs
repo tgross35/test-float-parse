@@ -95,6 +95,12 @@ pub fn register_tests() -> Vec<TestInfo> {
     TestInfo::register::<f32, gen::exhaustive::Exhaustive<f32>>(&mut tests);
 
     tests.sort_unstable_by_key(|t| (t.float_name, t.gen_name));
+    for i in 0..(tests.len() - 1) {
+        if tests[i].gen_name == tests[i + 1].gen_name {
+            panic!("dupliate test name {}", tests[i].gen_name);
+        }
+    }
+
     tests
 }
 
