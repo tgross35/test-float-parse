@@ -9,6 +9,7 @@ const S: &[&str] = &[
     "0", "-0", "+0",
 ];
 
+/// Check various non-number special strings.
 pub struct Special {
     iter: std::slice::Iter<'static, &'static str>,
 }

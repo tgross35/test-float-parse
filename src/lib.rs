@@ -103,17 +103,18 @@ where
     RangeInclusive<F::Int>: Iterator<Item = F::Int>,
     <F::Int as TryFrom<u128>>::Error: std::fmt::Debug,
 {
-    TestInfo::register::<F, gen::spot_checks::Special>(tests);
-    TestInfo::register::<F, gen::subnorm::SubnormEdgeCases<F>>(tests);
-    TestInfo::register::<F, gen::subnorm::SubnormComplete<F>>(tests);
-    TestInfo::register::<F, gen::exponents::SmallExponents<F>>(tests);
     TestInfo::register::<F, gen::exponents::LargeExponents<F>>(tests);
-    TestInfo::register::<F, gen::sparse::FewOnesInt<F>>(tests);
-    TestInfo::register::<F, gen::sparse::FewOnesFloat<F>>(tests);
-    TestInfo::register::<F, gen::integers::SmallInt>(tests);
-    TestInfo::register::<F, gen::integers::LargeInt<F>>(tests);
-    TestInfo::register::<F, gen::long_fractions::RepeatingDecimal>(tests);
+    TestInfo::register::<F, gen::exponents::SmallExponents<F>>(tests);
     TestInfo::register::<F, gen::fuzz::Fuzz<F>>(tests);
+    TestInfo::register::<F, gen::integers::LargeInt<F>>(tests);
+    TestInfo::register::<F, gen::integers::SmallInt>(tests);
+    TestInfo::register::<F, gen::long_fractions::RepeatingDecimal>(tests);
+    TestInfo::register::<F, gen::many_digits::RandDigits<F>>(tests);
+    TestInfo::register::<F, gen::sparse::FewOnesFloat<F>>(tests);
+    TestInfo::register::<F, gen::sparse::FewOnesInt<F>>(tests);
+    TestInfo::register::<F, gen::spot_checks::Special>(tests);
+    TestInfo::register::<F, gen::subnorm::SubnormComplete<F>>(tests);
+    TestInfo::register::<F, gen::subnorm::SubnormEdgeCases<F>>(tests);
 }
 
 /// Configuration for a single test.
